@@ -55,7 +55,7 @@ Also update the paths inside the dataframes, if needed.
 
 ---
 
-## 🧠 Model Checkpoints
+## 💾 Model Checkpoints
 
 <p align="center">
   <strong>Figure: MIPHEI-vit Architecture</strong><br>
