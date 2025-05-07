@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - override /train: cell
+
+data:
+  augmentation_dir: /root/workdir/tile_orion_norm_slides
+
+train:
+  epochs: 15
+  batch_size: 16
+  data_sampler:
+    use_sampler: False
+  gan_train: false
+  wandb_note: "miphei_vit"
+
+model:
+  model_name: myvitmatte
+  encoder:
+    encoder_name: hoptimus0
+    encoder_weights: null # null means foundation model encoder for vitmatte

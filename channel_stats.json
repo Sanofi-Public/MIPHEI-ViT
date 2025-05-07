@@ -1,0 +1,92 @@
+{
+    "Hoechst": {
+        "idx_channel": 0,
+        "std": 38.31878546041518,
+        "is_structural": true
+    },
+    "CD31": {
+        "idx_channel": 1,
+        "std": 5.498713573753559,
+        "is_structural": false
+    },
+    "CD45": {
+        "idx_channel": 2,
+        "std": 26.07032245155099,
+        "is_structural": false
+    },
+    "CD68": {
+        "idx_channel": 3,
+        "std": 10.648181066918182,
+        "is_structural": false
+    },
+    "CD4": {
+        "idx_channel": 4,
+        "std": 15.885813367490442,
+        "is_structural": false
+    },
+    "FOXP3": {
+        "idx_channel": 5,
+        "std": 3.615590655890493,
+        "is_structural": false
+    },
+    "CD8a": {
+        "idx_channel": 6,
+        "std": 8.519019158228375,
+        "is_structural": false
+    },
+    "CD45RO": {
+        "idx_channel": 7,
+        "std": 14.06807888525259,
+        "is_structural": false
+    },
+    "CD20": {
+        "idx_channel": 8,
+        "std": 8.465183851881198,
+        "is_structural": false
+    },
+    "PD-L1": {
+        "idx_channel": 9,
+        "std": 12.57477110852755,
+        "is_structural": false
+    },
+    "CD3e": {
+        "idx_channel": 10,
+        "std": 13.37003412805685,
+        "is_structural": false
+    },
+    "CD163": {
+        "idx_channel": 11,
+        "std": 10.834632444526331,
+        "is_structural": false
+    },
+    "E-cadherin": {
+        "idx_channel": 12,
+        "std": 22.313244729783626,
+        "is_structural": true
+    },
+    "PD-1": {
+        "idx_channel": 13,
+        "std": 20.619796532583972,
+        "is_structural": false
+    },
+    "Ki67": {
+        "idx_channel": 14,
+        "std": 10.465971986050734,
+        "is_structural": false
+    },
+    "Pan-CK": {
+        "idx_channel": 15,
+        "std": 25.021185269910358,
+        "is_structural": true
+    },
+    "SMA": {
+        "idx_channel": 16,
+        "std": 15.16689720673921,
+        "is_structural": true
+    },
+    
+    "RGB": {
+        "mean": [211.1146, 194.736, 213.8185],
+        "std": [30.0994, 36.4233, 26.4464]
+    }
+}

@@ -1,0 +1,11 @@
+beautifulsoup4==4.12.3
+dominate==2.6.0
+einops==0.8.0
+Pillow==10.3.0
+Requests==2.32.3
+scikit_image
+scipy
+timm==0.4.12
+tqdm==4.61.2
+visdom
+wandb==0.12.7

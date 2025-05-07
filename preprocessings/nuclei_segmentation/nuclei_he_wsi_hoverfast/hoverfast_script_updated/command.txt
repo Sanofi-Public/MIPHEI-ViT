@@ -1,0 +1,1 @@
+HoverFast infer_wsi /data/*.ome.tiff -m ../HoverFast/hoverfast_crosstissue_best_model.pth -l 20 -s 2 -o /data/hoverfast_output -r 100

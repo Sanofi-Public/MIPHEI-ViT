@@ -1,0 +1,13 @@
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.openmicroscopy.org/Schemas/OME/2016-06 http://www.openmicroscopy.org/Schemas/OME/2016-06/ome.xsd">
+  <Instrument ID="Instrument:0">
+    <Objective ID="Objective:0" NominalMagnification="20.0"/>
+  </Instrument>
+  <Image ID="Image:0">
+    <InstrumentRef ID="Instrument:0"/>
+    <ObjectiveSettings ID="Objective:0"/>
+    <Pixels ID="Pixels:0" DimensionOrder="XYZCT" Type="uint16" BigEndian="false" SizeX="58709" SizeY="48460" SizeZ="1" SizeC="19" SizeT="1" PhysicalSizeX="0.325" PhysicalSizeXUnit="µm" PhysicalSizeY="0.325" PhysicalSizeYUnit="µm" PhysicalSizeZ="1.0" PhysicalSizeZUnit="µm">
+      <MetadataOnly/>
+    </Pixels>
+  </Image>
+  <StructuredAnnotations/>
+</OME>

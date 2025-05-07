@@ -1,0 +1,12 @@
+gan_train: true
+use_cell_metrics: true
+callbacks:
+  modelcheckpoint:
+    mode: max
+    monitor: val_cell_auc
+
+data_sampler:
+  use_sampler: false
+  mode: cell
+  tresh: 4
+  other_percent: 0.2

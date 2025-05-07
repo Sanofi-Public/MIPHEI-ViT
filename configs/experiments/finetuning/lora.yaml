@@ -1,0 +1,24 @@
+# @package _global_
+defaults:
+  - override /train: cell
+
+data:
+  augmentation_dir: /root/workdir/tile_orion_norm_slides
+  targ_channel_names: [
+    "Hoechst", "CD31", "CD45", "CD68", "CD4", "FOXP3", "CD8a",
+    "CD45RO", "CD20", "PD-L1", "CD3e", "CD163", "E-cadherin",
+    "Ki67", "Pan-CK", "SMA"]
+
+train:
+  epochs: 15
+  batch_size: 16
+  data_sampler:
+    use_sampler: False
+  gan_train: false
+  wandb_note: lora
+
+model:
+  model_name: "unet_lora"
+  encoder:
+    encoder_name: hoptimus0
+    encoder_weights: /root/workdir/foundation_models/hoptimus0.bin

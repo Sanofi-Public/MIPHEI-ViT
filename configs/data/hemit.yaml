@@ -1,0 +1,13 @@
+# @package _global_
+
+data:
+  slide_dataframe_path: /root/workdir/data/slide_dataframe_hemit.csv
+  train_dataframe_path: /root/workdir/data/train_dataframe_hemit.csv
+  val_dataframe_path: /root/workdir/data/val_dataframe_hemit.csv
+  test_dataframe_path: /root/workdir/data/test_dataframe_hemit.csv
+  augmentation_dir: null
+  channel_stats_path: channel_stats_hemit.json
+  targ_channel_names: ["Pan-CK", "CD3", "Dapi"]
+
+train:
+  epochs: 80

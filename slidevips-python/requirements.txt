@@ -1,0 +1,5 @@
+pyvips
+torch
+numpy
+opencv-python
+ome_types

@@ -1,0 +1,10 @@
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.openmicroscopy.org/Schemas/OME/2016-06 http://www.openmicroscopy.org/Schemas/OME/2016-06/ome.xsd" UUID="urn:uuid:0bda23ed-7502-4fcf-84e2-7cc74367a673" Creator="palom 2022.3.1">
+  <Image ID="Image:0" Name="Image0">
+    <Pixels ID="Pixels:0" DimensionOrder="XYCZT" Type="uint8" Interleaved="true" SizeX="58709" SizeY="48460" SizeZ="1" SizeC="3" SizeT="1" PhysicalSizeX="0.325" PhysicalSizeXUnit="µm" PhysicalSizeY="0.325" PhysicalSizeYUnit="µm">
+      <Channel ID="Channel:0:0" SamplesPerPixel="3">
+        <LightPath/>
+      </Channel>
+      <TiffData IFD="0" PlaneCount="1"/>
+    </Pixels>
+  </Image>
+</OME>

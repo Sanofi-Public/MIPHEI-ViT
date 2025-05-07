@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - override /train: cell
+
+data:
+  augmentation_dir: /root/workdir/tile_orion_norm_slides
+
+train:
+  epochs: 20
+  batch_size: 4
+  data_sampler:
+    use_sampler: False
+  gan_train: false
+  wandb_note: "model_hemit"
+
+model:
+  model_name: "hemit"
+  encoder_weights: null

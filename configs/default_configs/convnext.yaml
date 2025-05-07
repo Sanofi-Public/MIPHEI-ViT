@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - override /train: cell
+
+data:
+  augmentation_dir: /root/workdir/tile_orion_norm_slides
+
+train:
+  epochs: 15
+  batch_size: 16
+  data_sampler:
+    use_sampler: False
+  gan_train: false
+  wandb_note: "model_convnext"
+
+model:
+  model_name: "smp_unet"
+  encoder:
+    encoder_name: tu-convnext_large
+    encoder_weights: imagenet

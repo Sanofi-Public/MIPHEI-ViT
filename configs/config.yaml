@@ -1,0 +1,41 @@
+defaults:
+  - _self_
+  - data: orion
+  - train: cell
+  - model: unet
+
+data:
+  slide_dataframe_path: path/to/slide_dataframe.csv
+  train_dataframe_path: path/to/train_dataframe.csv
+  val_dataframe_path: path/to/val_dataframe.csv
+  test_dataframe_path: path/to/test_dataframe.csv
+  augmentation_dir: null
+  channel_stats_path: channel_stats.json
+  targ_channel_names: []
+
+train:
+  epochs: 20
+  batch_size: 16
+  gan_train: false
+  gan_mode: "structural"
+  learning_rate_d: 0.0002
+  learning_rate_g: 0.0002
+  precision: "16-mixed"
+  foreground_head: false
+  use_cell_metrics: false
+  wandb_project: he-if-image-to-image
+  wandb_note: null
+  losses:
+    lambda_factor: 50
+    use_weighted_mae: false
+    adversarial_loss: binary_crossentropy
+    perceptual_loss: false
+    cell_loss:
+      use_loss: false
+      use_mse: false
+      use_clustering: false
+      mlp_path: "mlp.ckpt"
+  callbacks:
+    modelcheckpoint:
+      mode: min
+      monitor: val_gen_loss_sim

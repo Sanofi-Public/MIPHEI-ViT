@@ -1,0 +1,8 @@
+# @package _global_
+
+data:
+  slide_dataframe_path: null
+  train_dataframe_path: null
+  val_dataframe_path: null
+  test_dataframe_path: /root/workdir/Immucan_tiles/dataframe_tile.csv
+  channel_stats_path: channel_stats.json

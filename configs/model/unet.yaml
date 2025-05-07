@@ -1,0 +1,7 @@
+model_name: "unet"
+dropout: 0.1
+foreground_head: false
+checkpoint_path: null
+encoder:
+  encoder_name: mobilenet_v2
+  encoder_weights: imagenet

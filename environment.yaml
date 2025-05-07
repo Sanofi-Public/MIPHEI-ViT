@@ -1,0 +1,10 @@
+# environment.yml
+name: miphei
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pyvips=3.0.0
+  - pyarrow=20.0.0
+  - pip
