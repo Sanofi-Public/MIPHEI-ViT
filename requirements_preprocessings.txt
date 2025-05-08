@@ -1,5 +1,4 @@
 albumentations==2.0.5
-auto_mix_prep==0.2.0
 dask==2025.4.1
 h5py==3.13.0
 magicgui==0.10.0
