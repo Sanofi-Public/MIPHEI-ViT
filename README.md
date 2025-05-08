@@ -62,12 +62,29 @@ Also update the paths inside the dataframes, if needed.
   <img src="figures/figure_architecture.png" alt="Prediction Example" width="500px">
 </p>
 
-The pretrained model weights can be downloaded from  <a href="https://huggingface.co/Estabousi/MIPHEI-vit" target="_blank">
-  <img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" alt="Hugging Face" height="24" style="vertical-align: middle;" />
-  Hugging Face
-</a>.
+<ul>
+  <li>
+    The MIPHEI-ViT model weights can be downloaded from
+    <a href="https://huggingface.co/Estabousi/MIPHEI-vit" target="_blank">
+      <img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" alt="Hugging Face" height="24" style="vertical-align: middle;" />
+      Hugging Face
+    </a>.
+  </li>
 
-You can download original HEMIT checkpoint [here](https://github.com/BianChang/Pix2pix_DualBranch).
+  <li>
+    <p>
+      The other models used for comparison in the paper—<strong>HEMIT*</strong>, <strong>HEMIT-ORION</strong>, <strong>UNETR H-Optimus-0</strong>, and <strong>U-NET ConvNeXtv2</strong>—are accessible on
+      <a href="https://wandb.ai/guillaume-balezo/MIPHEI-ViT_paper/artifacts/" target="_blank">
+        <img src="https://wandb.ai/logo.svg" alt="Weights & Biases" height="20" style="vertical-align: middle; margin-right: 4px;" />
+        Weights & Biases
+      </a>.
+    </p>
+  </li>
+
+  <li>
+    You can download original HEMIT checkpoint <a href="https://github.com/BianChang/Pix2pix_DualBranch">here</a>.
+  </li>
+</ul>
 
 Each model is organized in a folder containing:
 
