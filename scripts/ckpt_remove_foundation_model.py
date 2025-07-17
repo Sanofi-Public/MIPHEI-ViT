@@ -1,10 +1,36 @@
+"""
+Removes foundation model encoder weights from a checkpoint, except for LoRA parameters.
+
+Utility to prune foundation model weights from a PyTorch Lightning checkpoint,
+keeping only generator (and LoRA) weights, and save in PyTorch and Safetensors formats.
+"""
+
+import sys
 import argparse
 from pathlib import Path
-from safetensors.torch import save_file
+
 import torch
+from safetensors.torch import save_file
+
+sys.path.append("../")
+from src.utils import get_generator_state_dict
 
 
-def remove_foundation_model_ckpt(state_dict):
+def remove_foundation_model_ckpt(state_dict) -> dict:
+    """
+    Remove foundation model from a state dict checkpoint, except for LoRA parameters.
+
+    This function iterates through the provided state dictionary and removes keys related to the
+    foundation model's encoder (i.e., keys containing "generator.encoder.vit" or
+    "generator.encoder.model"), unless the key also contains ".lora", in which case it is retained.
+    All other keys are preserved. The idea here is to avoid sharing weights of excisting foundation
+    model encoder, that can have restricted access.
+    Args:
+        state_dict (dict): The original state dictionary containing model parameters.
+    Returns:
+        dict: A new state dictionary with foundation model encoder parameters removed, except for
+            LoRA parameters.
+    """
     new_state_dict = {}
     for k, v in state_dict.items():
         if ("generator.encoder.vit" in k) or ("generator.encoder.model" in k):
@@ -13,13 +39,6 @@ def remove_foundation_model_ckpt(state_dict):
         else:
             new_state_dict[k] = v
     return new_state_dict
-
-def get_generator_state_dict(state_dict):
-    generator_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("generator."):
-            generator_state_dict[k.replace("generator.", "")] = v
-    return generator_state_dict
 
 
 if __name__ == "__main__":

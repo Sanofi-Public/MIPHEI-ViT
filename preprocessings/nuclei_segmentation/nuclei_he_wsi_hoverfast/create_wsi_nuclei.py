@@ -1,22 +1,19 @@
 import pyvips
 
-import argparse
 import pandas as pd
 import torch
 import numpy as np
 
-import os
 from tqdm import tqdm
-import shutil
 
 from pathlib import Path
-from shapely import Polygon, STRtree, MultiPolygon
+from shapely import Polygon, STRtree
 from shapely.geometry import box
 
 from slidevips import SlideVips
 from slidevips.ome_metadata import adapt_ome_metadata
-from slidevips.torch_datasets import SlideDataset
 from torch.utils.data import Dataset
+from scipy import ndimage as ndi
 from skimage.segmentation import watershed
 from skimage.morphology import binary_dilation, disk
 from skimage.segmentation import find_boundaries
@@ -80,6 +77,7 @@ class NucleiDataset(Dataset):
         self.nuclei_polygons = nuclei_polygons
         self.stree = STRtree(self.nuclei_polygons)
         self.tiles_shapely = [box(x, y, x + tile_size, y + tile_size) for x, y in tile_positions]
+        self.tile_positions = tile_positions
         self.tile_size = tile_size
         self.disk_shape = 4
 
@@ -88,6 +86,7 @@ class NucleiDataset(Dataset):
 
     def __getitem__(self, idx):
         tile_shapely = self.tiles_shapely[idx]
+        tile_position = self.tile_positions[idx]
         idxs = self.stree.query(tile_shapely)
         if len(idxs) > 0:
             polygons_roi = [self.nuclei_polygons[idx] for idx in idxs]
@@ -102,50 +101,35 @@ class NucleiDataset(Dataset):
                 fill=0,
                 dtype=np.int32
             )
-            image = watershed(
-                -image, image, mask=binary_dilation(image>0, footprint=disk(self.disk_shape)),
-                watershed_line=False
-            )
+            binary = image > 0
+            dilated_mask = binary_dilation(binary, footprint=disk(self.disk_shape))
+            distance = ndi.distance_transform_edt(~binary)
+            image = watershed(-distance, markers=image, mask=dilated_mask, watershed_line=False)
             boundaries = find_boundaries(image, mode='outer').astype(image.dtype)
             image = image[::-1, :].copy()
         else:
             image = np.zeros((self.tile_size, self.tile_size), dtype=np.int32)
             boundaries = np.zeros_like(image)
-        return np.dstack((image, boundaries))
+        return {"mask": np.dstack((image, boundaries)), "tile_position": tile_position}
 
 
-def dataloader_worker_init_fn(worker_id):
-    worker_info = torch.utils.data.get_worker_info()
-    dataset = worker_info.dataset  # Get the dataset copy in this worker
-    dataset.reset()  # Call the reset function
-
-
-TILE_SIZE = 2048
 CHANNEL_NAMES = ["cell", "boundary"]
-BATCH_SIZE = 1
-SLIDE_DATAFRAME_PATH = "/root/workdir/slide_dataframe_immucan_he.csv"
-HOVERFAST_DIR = "/root/workdir/hoverfast_output"
-SAVE_FOLDER = "/root/workdir/HandE_nuclei"
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--idx_row', type=int, help='Idx of the row in dataframe')
-    args = parser.parse_args()
-    idx_row = args.idx_row
-    slide_dataframe = pd.read_csv(SLIDE_DATAFRAME_PATH)
-    row = slide_dataframe.iloc[idx_row]
-    slide_name = row["in_slide_name"]
-    slide = SlideVips(row["in_slide_path"])
+def create_wsi_nuclei(slide_path, hoverfast_dir, save_folder, tile_size=2048, batch_size=1):
+
+
+    slide_name = Path(slide_path).stem
+    slide = SlideVips(slide_path)
     resolution = slide.mpp
     magnification = slide.magnification
     slide_dim = slide.dimensions
     slide.close()
 
     out_slide_name = slide_name.replace(".ome", "") + ".ome.tiff"
-    output_path = str(Path(SAVE_FOLDER) / out_slide_name)
+    output_path = str(Path(save_folder) / out_slide_name)
 
-    data_path = str(Path(HOVERFAST_DIR) / (slide_name + ".json.gz"))
+    data_path = str(Path(hoverfast_dir) / (slide_name + ".json.gz"))
     data = read_json_gz(data_path)
 
     polygons = []
@@ -155,14 +139,12 @@ if __name__ == "__main__":
         polygons.append(polygon)
     
     stree = STRtree(polygons)
-    centroids = np.asarray(
-        [[polygon.centroid.x, polygon.centroid.y] for polygon in polygons])
 
-    tile_positions = get_tiles(slide_dim[0], slide_dim[1], TILE_SIZE)
+    tile_positions = get_tiles(slide_dim[0], slide_dim[1], tile_size)
     idxs_keep = []
     for idx, tile_position in enumerate(tile_positions):
         x, y = tile_position
-        tile_shapely = box(x, y, x + TILE_SIZE, y + TILE_SIZE)
+        tile_shapely = box(x, y, x + tile_size, y + tile_size)
         idxs = stree.query(tile_shapely)
         if len(idxs) > 0:
             idxs_keep.append(idx)
@@ -175,33 +157,31 @@ if __name__ == "__main__":
         tile_positions.append(tile_pos_rows_dict[x])
     tile_positions = np.vstack(tile_positions)
 
-    nuclei_dataset = NucleiDataset(polygons, tile_positions, TILE_SIZE)
+    nuclei_dataset = NucleiDataset(polygons, tile_positions, tile_size)
     num_workers = 0
     nuclei_dataloader = torch.utils.data.DataLoader(
-            nuclei_dataset, batch_size=BATCH_SIZE, shuffle=False,
-            num_workers=num_workers, drop_last=False,
-            worker_init_fn=dataloader_worker_init_fn, pin_memory=False)
+        nuclei_dataset, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, drop_last=False,
+        pin_memory=False)
 
 
-    tile_size_x = TILE_SIZE
-    tile_size_y = TILE_SIZE
     n_channels = len(CHANNEL_NAMES)
 
 
     image_pyvips = pyvips.Image.black(slide_dim[0], slide_dim[1], bands=n_channels).cast("int")
 
-    for idx_batch, out_batch in tqdm(enumerate(tqdm(nuclei_dataloader))):
-        out_batch = out_batch.numpy()
+    for idx_batch, batch in tqdm(enumerate(tqdm(nuclei_dataloader))):
+        mask_batch = batch["mask"].numpy()
+        tile_positions_batch = batch["tile_position"]
         
-        tile_positions_batch = tile_positions[idx_batch * BATCH_SIZE: (idx_batch + 1) * BATCH_SIZE]
-        for tile_position, out in zip(tile_positions_batch, out_batch):
-            tile = pyvips.Image.new_from_array(out)
+        for tile_position, mask in zip(tile_positions_batch, mask_batch):
+            tile = pyvips.Image.new_from_array(mask)
             image_pyvips = image_pyvips.insert(tile,
                 tile_position[0], 
                 tile_position[1])
             
 
-    del tile, out_batch
+    del tile, mask_batch
     del nuclei_dataloader, nuclei_dataset
     gc.collect()
 
@@ -233,3 +213,23 @@ if __name__ == "__main__":
         yres=1000 / resolution,
         page_height=image_height)
     del image_pyvips
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--slide_path", type=str, required=True, help="Path to the input slide.")
+    parser.add_argument("--hoverfast_dir", type=str, required=True, help="Directory containing HoverFast JSON files.")
+    parser.add_argument("--save_folder", type=str, required=True, help="Directory to save the output OME-TIFF file.")
+    parser.add_argument("--tile_size", type=int, default=2048, help="Size of the tiles to process.")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size for processing tiles.")
+    args = parser.parse_args()
+
+    create_wsi_nuclei(
+        slide_path=args.slide_path,
+        hoverfast_dir=args.hoverfast_dir,
+        save_folder=args.save_folder,
+        tile_size=args.tile_size,
+        batch_size=args.batch_size
+    )
+    print(f"Slide: {args.slide_path}, HoverFast dir: {args.hoverfast_dir}, Save folder: {args.save_folder}")

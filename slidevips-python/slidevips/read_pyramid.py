@@ -1,23 +1,31 @@
+"""
+Module for reading image pyramids and extracting metadata using pyvips.
+
+Provides a function to retrieve multi-resolution image pyramids and associated
+metadata from various whole slide image formats (e.g., SVS, NDPI, OME-TIFF, QPTIFF).
+"""
+
+from typing import List, Optional, Tuple
+
 from collections import defaultdict
 from pathlib import Path
-import pyvips
-from typing import List, Optional, Tuple
+
 import numpy as np
 import ome_types
+import pyvips
 
 
 def get_pyramid_pyvips(filename: str, channel_idxs: Optional[List[int]] = None,
-                       mode: Optional[str] = None) -> Tuple[List[pyvips.Image], dict]:
+                       mode: str = "RGB") -> Tuple[List[pyvips.Image], dict]:
     """
-    Retrieves a pyramid of images from a given filename using pyvips library and the
-        corresponding metadata.
+    Retrieve a pyramid of images from a given filename using pyvips library and the \
+    corresponding metadata.
 
     Args:
         filename (str): The path to the image file.
         channel_idxs (list, optional): List of channel indexes to extract from the image.
             Defaults to None.
-        mode (str, optional): The mode of the image. Defaults to None.
-
+        mode (str, optional): The mode of the image. Defaults to RGB.
     Returns:
         tuple: A tuple containing the pyramid of images and the image fields.
     """

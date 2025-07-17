@@ -1,110 +1,38 @@
-import pyvips
-from omegaconf import OmegaConf
-import pandas as pd
-from pathlib import Path
-import torch
-import argparse
-import albumentations as A
-from tqdm import tqdm
-import joblib
-from timm.layers import resample_patch_embed, resize_rel_pos_bias_table
-from xgboost import XGBClassifier
-from sklearn.multiclass import OneVsRestClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_auc_score, balanced_accuracy_score, f1_score
+"""
+Evaluate a trained model on ORION-CRC using HEMIT codebase on ORION-CRC dataset to extract \
+cell-level metrics and classification results.
 
+This script loads an HEMIT generator trained on ORION with HEMIT codebase, runs inference on ORION
+data, computes cell-level marker predictions, and evaluates classification performance (logistic
+regression, XGBoost). Results are saved as CSV files.
+
+HEMIT codebase: https://github.com/BianChang/Pix2pix_DualBranch
+"""
+
+import argparse
+from pathlib import Path
 import sys
+
+import albumentations as A
+import joblib
+import pandas as pd
+import torch
+from omegaconf import OmegaConf
+from tqdm import tqdm
+
+import pyvips  # Avoid pyvips import error from src.dataset
+
+from eval_utils import train_xgboost, adapt_checkpoint_hemit
+
 sys.path.append("../")
-from src.dataset import get_width_height, get_effective_width_height, NormalizationLayer,\
-        TileImg2ImgSlideDataset
+from src.dataset import (
+    get_width_height,
+    get_effective_width_height,
+    NormalizationLayer,
+    TileImg2ImgSlideDataset,
+)
 from src.generators.hemit_models import get_generator_hemit
 from src.metrics import CellMetrics
-
-
-def adapt_checkpoint_hemit(state_dict, model):
-
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if ".downsample.norm" in k or "downsample.reduction" in k:
-            k_split = k.split(".")
-            k_split[2] = str(int(k_split[2]) + 1)
-            new_k = ".".join(k_split)
-        elif 'relative_position_index' in k or 'attn_mask' in k:
-            continue
-        else:
-            new_k = k
-        new_state_dict[new_k] = v
-    
-    state_dict = new_state_dict
-    
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if any([n in k for n in ('relative_position_index', 'attn_mask')]):
-                continue
-
-        if 'swinT.patch_embed.proj.weight' in k:
-            _, _, H, W = model.swinT.patch_embed.proj.weight.shape
-            if v.shape[-2] != H or v.shape[-1] != W:
-                v = resample_patch_embed(
-                    v,
-                    (H, W),
-                    interpolation='bicubic',
-                    antialias=True,
-                    verbose=True,
-                )
-
-        if k.endswith('relative_position_bias_table'):
-            m = model.get_submodule(k[:-29])
-            if v.shape != m.relative_position_bias_table.shape or m.window_size[0] != m.window_size[1]:
-                v = resize_rel_pos_bias_table(
-                    v,
-                    new_window_size=m.window_size,
-                    new_bias_shape=m.relative_position_bias_table.shape,
-                )
-        new_state_dict[k] = v
-
-    return new_state_dict
-
-
-def train_xgboost(train_cell_dataframe, test_cell_dataframe, cell_metrics):
-    # Prepare the training and testing data
-    X_train = train_cell_dataframe[cell_metrics.marker_pred_cols].values
-    X_test = test_cell_dataframe[cell_metrics.marker_pred_cols].values
-    y_train = train_cell_dataframe[cell_metrics.marker_cols].values
-    y_test = test_cell_dataframe[cell_metrics.marker_cols].values
-
-    # Standardize the features
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
-
-    # Initialize XGBClassifier with scale_pos_weight to handle class imbalance
-    xgb_model = XGBClassifier(
-        eval_metric="logloss",
-        scale_pos_weight=sum(y_train.ravel() == 0) / sum(y_train.ravel() == 1),  # Adjusted for multi-label
-        random_state=42,
-    )
-
-    # Define OneVsRestClassifier with XGBClassifier
-    model = OneVsRestClassifier(xgb_model)
-    model.fit(X_train, y_train)
-
-    # Predict probabilities and class labels
-    y_proba = model.predict_proba(X_test)
-    y_pred = model.predict(X_test)
-
-    # Evaluate for each marker/target
-    results = []
-    for idx, marker_target in enumerate(cell_metrics.marker_cols):
-        roc_auc = roc_auc_score(y_test[:, idx], y_proba[:, idx])
-        balanced_acc = balanced_accuracy_score(y_test[:, idx], y_pred[:, idx])
-        f1 = f1_score(y_test[:, idx], y_pred[:, idx])
-        results.append((marker_target, roc_auc, balanced_acc, f1))
-
-    # Display results in a DataFrame
-    results_df = pd.DataFrame(results, columns=["Marker name", "ROC AUC", "Balanced Accuracy", "F1 Score"])
-    model_dict = {"model": model, "scaler": scaler}
-    return model_dict, results_df
 
 
 ORION_MARKERS = [
@@ -150,29 +78,27 @@ if __name__ == "__main__":
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
     torch.cuda.empty_cache()
-    generator = get_generator_hemit(nc_in, nc_out, width,
-                                ngf=64, netG="SwinTResnet", norm='batch', use_dropout=False,
-                                init_type='normal', init_gain=0.02, gpu_ids=[])
+    generator = get_generator_hemit(
+        nc_in, nc_out, width, ngf=64, netG="SwinTResnet", norm='batch', use_dropout=False,
+        init_type='normal', init_gain=0.02, gpu_ids=[])
     state_dict = torch.load(checkpoint_path, map_location="cpu")
     state_dict = adapt_checkpoint_hemit(state_dict, generator)
     generator.load_state_dict(state_dict)
     generator = generator.eval().cuda()
 
-
     dataframe = pd.concat(
         [pd.read_csv(cfg.data.val_dataframe_path), pd.read_csv(cfg.data.test_dataframe_path)],
-    ignore_index=True)
+        ignore_index=True)
 
     dataset = TileImg2ImgSlideDataset(
         dataframe=dataframe, preprocess_input_fn=preprocess_input_fn,
         spatial_augmentations=spatial_augmentations, return_nuclei=True)
 
-
     num_workers = 6
     batch_size = 4
     device = "cpu"
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, pin_memory=device!="cpu",
+        dataset, batch_size=batch_size, pin_memory=device != "cpu",
         shuffle=False, drop_last=False, num_workers=num_workers
     )
 
@@ -186,11 +112,12 @@ if __name__ == "__main__":
         with torch.inference_mode():
             out = generator(x)
             # scale output in [-0.9, 0.9] to match cell_metrics input
-            out = (out  + 1) / 2 # [-1, 1] -> [0, 1]
-            out = out * 1.8 - 0.9 # [0, 1] -> [-0.9, 0.9]
+            out = (out + 1) / 2  # [-1, 1] -> [0, 1]
+            out = out * 1.8 - 0.9  # [0, 1] -> [-0.9, 0.9]
             out = out.float()
+            if out.mean(axis=(0, 2, 3))[1] > 0.:
+                print("ok")
         cell_metrics.update(out, nuclei_masks, slide_names)
-
 
     cell_dataframe = cell_metrics.get_dataframe_cell_pred_target()
     cell_metrics.reset()
@@ -201,17 +128,19 @@ if __name__ == "__main__":
     val_cell_dataframe = cell_dataframe[cell_dataframe["slide_name"].isin(val_slide_names)]
     test_cell_dataframe = cell_dataframe[cell_dataframe["slide_name"].isin(test_slide_names)]
 
-
     # cell level classification
     # logistic regression
     results, logreg = cell_metrics.train_logistic_regression(
         val_cell_dataframe, test_cell_dataframe, return_metrics=True)
-    results_df = pd.DataFrame(results, columns=["Marker", "ROC AUC", "Balanced Accuracy", "F1 Score"])
+    results_df = pd.DataFrame(results, columns=["Marker", "ROC AUC", "Balanced Accuracy",
+                                                "F1 Score"])
     # xgboost
-    xgboost_dict, results_df_xgboost = train_xgboost(val_cell_dataframe, test_cell_dataframe, cell_metrics)
+    xgboost_dict, results_df_xgboost = train_xgboost(
+        val_cell_dataframe, test_cell_dataframe, cell_metrics)
 
     results_df.to_csv(str(Path(checkpoint_path).parent / "results_logreg.csv"), index=False)
-    results_df_xgboost.to_csv(str(Path(checkpoint_path).parent / "results_xgboost.csv"), index=False)
+    results_df_xgboost.to_csv(
+        str(Path(checkpoint_path).parent / "results_xgboost.csv"), index=False)
 
     cell_dataframe.to_csv(str(Path(checkpoint_path).parent / "cell_dataframe.csv"), index=False)
     torch.save(logreg.state_dict(), str(Path(checkpoint_path).parent / "logreg.pth"))

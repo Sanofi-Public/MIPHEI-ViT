@@ -1,36 +1,53 @@
 """
-Test scripts for image to image segmentation.
+Test a trained model on a test dataset.
+
+Used by run_test.py.
 """
+
 import logging
-logging.getLogger('pyvips').setLevel(logging.WARNING)
-
 import os
-os.environ['VIPS_CONCURRENCY'] = '1'
-import pyvips
-
-from omegaconf import OmegaConf
 import json
-import numpy as np
-import pandas as pd
-from pathlib import Path
-from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning import Trainer
-import torch
 
-from .dataset import NormalizationLayer, get_effective_width_height, DataModule,\
-    get_width_height
+import pandas as pd
+import torch
+from omegaconf import OmegaConf, DictConfig
+from pytorch_lightning import Trainer
+
+import pyvips  # Avoid pyvips import error from src.dataset
+
+from .dataset import (
+    NormalizationLayer,
+    get_effective_width_height,
+    DataModule,
+    get_width_height,
+)
 from .metrics import CellMetrics
 from .models import ModelModule, DiscriminatorPatch
-from .utils import get_foreground_weight
-from .callbacks import DebugImageLogger
-from .loss import WeightedMSELoss, get_focal_loss, CellLoss
+from .loss import WeightedMSELoss, CellLoss
 from .generators import get_generator
 
 
-def test_model(cfg, checkpoint_path, run_name):
+def test_model(cfg: DictConfig, checkpoint_path: str, run_name: str) -> None:
+    """
+    Test a trained model on a test dataset using the provided configuration and checkpoint.
+
+    This function sets up the data module, loads the model and its weights, prepares the loss
+    functions, and evaluates the model on the test set.
+    Args:
+        cfg (omegaconf.DictConfig): Configuration object containing all experiment parameters,
+            including data paths, model settings, training options, and loss function parameters.
+        checkpoint_path (str): Path to the full Lightning model checkpoint file to load for
+            evaluation.
+        run_name (str): Name of the current run, used for logging and experiment tracking.
+    Returns:
+        None
+    Raises:
+        FileNotFoundError: If any of the required data files or checkpoint files are not found.
+        ValueError: If configuration parameters are invalid or inconsistent.
+    """
+    logging.getLogger('pyvips').setLevel(logging.WARNING)  # Suppress pyvips useless warnings
     log = logging.getLogger(__name__)
     log.info(OmegaConf.to_yaml(cfg))
-    pyvips.cache_set_max(0)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log.info("device: {}".format(device))
 
@@ -58,17 +75,16 @@ def test_model(cfg, checkpoint_path, run_name):
     preprocess_input_fn = NormalizationLayer(channel_stats["RGB"], mode="he")
 
     channel_names = cfg.data.targ_channel_names
-    targ_channel_idxs = [channel_stats[channel_name]["idx_channel"] \
+    targ_channel_idxs = [channel_stats[channel_name]["idx_channel"]
                          for channel_name in channel_names]
-    stats_list_if = [channel_stats[channel_name] for channel_name in channel_names].copy()
-    preprocess_target_fn = NormalizationLayer(stats_list_if, mode="if")
+    preprocess_target_fn = NormalizationLayer(mode="if")
 
     data_module = DataModule(
-        slide_dataframe=slide_dataframe, train_dataframe=train_dataframe, 
+        slide_dataframe=slide_dataframe, train_dataframe=train_dataframe,
         val_dataframe=val_dataframe, test_dataframe=test_dataframe,
         targ_channel_idxs=targ_channel_idxs, from_slide=from_slide,
         input_shape=(width, height),
-        batch_size=cfg.train.batch_size, pin_memory=device!="cpu",
+        batch_size=cfg.train.batch_size, pin_memory=device != "cpu",
         return_nuclei=cfg.train.use_cell_metrics, train_sampler=None,
         preprocess_input_fn=preprocess_input_fn, preprocess_target_fn=preprocess_target_fn,
         )
@@ -82,15 +98,14 @@ def test_model(cfg, checkpoint_path, run_name):
     if os.name == 'nt':
         jit_compile = False
     else:
-        #generator = torch.compile(generator)
-        #jit_compile = True
+        # generator = torch.compile(generator, mode="max-autotune")
+        # jit_compile = True
         jit_compile = False
-
 
     gan_train = cfg.train.gan_train
     selected_channels = [
         channel_stats[channel_name]["is_structural"] for channel_name in channel_names] \
-            if cfg.train.gan_mode == "stuctural" else None
+        if cfg.train.gan_mode == "structural" else None
     discriminator = DiscriminatorPatch(
             input_nc=nc_out + nc_in, norm_layer_type=None,
             selected_channels=selected_channels) if gan_train else None
@@ -99,29 +114,17 @@ def test_model(cfg, checkpoint_path, run_name):
     else:
         cell_metrics = None
 
-
     lambda_factor = cfg.train.losses.lambda_factor
-    if cfg.train.losses.use_weighted_mae:
-        foreground_weight = get_foreground_weight(
-            channel_names, train_dataframe)
-        foreground_weight = np.float32(foreground_weight)
-        foreground_weight = torch.tensor(foreground_weight).reshape((1, -1, 1, 1)).to(device)
-        foreground_thresh = preprocess_target_fn(0)
-
-        print("foreground_weight", foreground_weight.cpu().numpy().flatten().tolist(),
-            "foreground_thresh", foreground_thresh.flatten().tolist())
-        #loss_reconstruct = get_weighted_mae_loss(lambda_factor, foreground_weight, foreground_thresh)
-        loss_reconstruct = get_focal_loss(lambda_factor, foreground_weight)
-        #loss_reconstruct = get_shrinkage_loss(lambda_factor, foreground_weight)
-    else:
-        #loss_reconstruct = get_mse_loss(lambda_factor)
-        marker_weights = torch.Tensor([channel_stats[channel_name]["std"] \
-                         for channel_name in channel_names])
-        marker_weights = 1 / marker_weights
-        marker_weights = marker_weights / marker_weights.min()
-        print(marker_weights)
-        loss_reconstruct = WeightedMSELoss(lambda_factor, marker_weights)
-        #loss_reconstruct = L1_L2_Loss(lambda_factor=10.)
+    # loss_reconstruct = get_mse_loss(lambda_factor)
+    # loss_reconstruct = get_focal_loss(lambda_factor, marker_weights)
+    # loss_reconstruct = get_focal_loss(lambda_factor, marker_weights)
+    # loss_reconstruct = L1_L2_Loss(lambda_factor=10.)
+    marker_weights = torch.Tensor([channel_stats[channel_name]["std"] ** 2
+                                   for channel_name in channel_names])  # Channel variances
+    marker_weights = 1 / marker_weights
+    marker_weights = marker_weights / marker_weights.min()
+    print(marker_weights)
+    loss_reconstruct = WeightedMSELoss(lambda_factor, marker_weights)
 
     cell_loss_params = cfg.train.losses.cell_loss
     if cell_loss_params.use_loss:
@@ -131,7 +134,7 @@ def test_model(cfg, checkpoint_path, run_name):
     else:
         cell_loss = None
 
-    #foreground_loss = CombinedBCEAndDiceLoss(1.)
+    # foreground_loss = CombinedBCEAndDiceLoss(1.)
     pl_model = ModelModule(
         generator=generator, discriminator=discriminator,
         lr_g=0.,
@@ -141,12 +144,11 @@ def test_model(cfg, checkpoint_path, run_name):
         loss_reconstruct=loss_reconstruct,
         gan_train=gan_train)
 
-
     pl_model = pl_model.to(device)
     if jit_compile:
         pl_model = torch.compile(pl_model)
 
     trainer = Trainer(callbacks=None, logger=None,
                       accelerator="gpu", precision=cfg.train.precision, devices=1,
-    )
+                      )
     trainer.test(pl_model, test_dataloader, ckpt_path=checkpoint_path, verbose=True)

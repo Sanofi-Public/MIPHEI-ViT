@@ -1,21 +1,53 @@
-# Code inspired by https://github.com/sebastianffx/stainlib/blob/master/stainlib/augmentations.py
+"""
+Implementation of histology-specific augmentations.
+
+Inspired by: https://github.com/sebastianffx/stainlib/blob/main/stainlib/augmentation/augmenter.py
+"""
 
 from albumentations.core.transforms_interface import ImageOnlyTransform
 import numpy as np
 import skimage
 
 
+class InvalidRangeError(Exception):
+    """Raise when the range adjustment is not valid."""
+
+    def __init__(self, title: str, range: tuple):
+        super().__init__(f"Invalid range of {title}: {range}")
+        self.range = range
+        self.title = title
+
+
 class GrayscaleAugmentor(ImageOnlyTransform):
-    def __init__(self, sigma1=0.1, sigma2=0.1, always_apply=False, p=0.5):
+    """
+    Apply a grayscale augmentation to an input tile with random intensity and brightness \
+    adjustments.
+
+    This transform converts an RGB image to grayscale, then randomly perturbs the intensity
+    (contrast) and brightness of the grayscale image using the specified sigma values. The result
+    is stacked back into three channels to maintain compatibility with models expecting RGB input.
+    Attributes:
+        sigma1 (float): Standard deviation for random intensity (contrast) adjustment.
+        sigma2 (float): Standard deviation for random brightness adjustment.
+        always_apply (bool): If True, always apply the transform.
+        p (float): Probability of applying the transform.
+    Args:
+        sigma1 (float, optional): Range for intensity scaling. Default is 0.1.
+        sigma2 (float, optional): Range for brightness shifting. Default is 0.1.
+        always_apply (bool, optional): Whether to always apply the transform. Default is False.
+        p (float, optional): Probability of applying the transform. Default is 0.5.
+    Methods:
+        apply(patch, **params): Applies the grayscale augmentation to the input image patch.
+    """
+
+    def __init__(self, sigma1: float = 0.1, sigma2: float = 0.1,
+                 always_apply: bool = False, p: float = 0.5):
         super(GrayscaleAugmentor, self).__init__(p, always_apply)
         self.sigma1 = sigma1
         self.sigma2 = sigma2
 
-    def apply(self, patch, **params):
-        """
-        Get an augmented version of the fitted image.
-        :return:
-        """
+    def apply(self, patch: np.ndarray, **params) -> np.ndarray:
+        """Get an augmented version of the fitted image."""
         alpha = np.random.uniform(1 - self.sigma1, 1 + self.sigma1)
         beta = np.random.uniform(-self.sigma2, self.sigma2)
         grayscale = skimage.color.rgb2gray(patch)
@@ -26,31 +58,30 @@ class GrayscaleAugmentor(ImageOnlyTransform):
 
 
 class HedColorAugmentor(ImageOnlyTransform):
-    """Apply color correction in HED color space on the RGB patch."""
+    """
+    Apply color correction in HED color space to an RGB patch.
+
+    This augmentation randomly perturbs the Haematoxylin, Eosin, and DAB channels in the HED color
+    space by scaling (sigma) and shifting (bias) each channel within configurable ranges. The
+    transformation is only applied if the mean intensity of the patch is within a specified cutoff
+    range.
+
+    Attributes:
+        _sigma_ranges (list of tuple): Adjustment ranges for H, E, and D channels.
+        _bias_ranges (list of tuple): Bias ranges for H, E, and D channels.
+        _cutoff_range (tuple): Cutoff interval for mean patch intensity.
+
+    Args:
+        thresh (float, optional): Range for sigma and bias for all channels. Default is 0.01.
+        always_apply (bool, optional): Whether to always apply the transform. Default is False.
+        p (float, optional): Probability of applying the transform. Default is 0.5.
+    """
 
     def __init__(
         self,
-        thresh=0.01,
-        always_apply=False, p=0.5
+        thresh: float = 0.01,
+        always_apply: bool = False, p: float = 0.5
     ):
-        """
-        Initialize the object. For each channel the augmented value is calculated as
-        value = value * sigma + bias
-
-        Args:
-            thresh: Blabla
-
-        Raises:
-            InvalidHaematoxylinSigmaRangeError: The sigma range for Haematoxylin
-            channel adjustment is not valid.
-            InvalidHaematoxylinBiasRangeError: The bias range for Haematoxylin
-            channel adjustment is not valid.
-            InvalidEosinSigmaRangeError: The sigma range for Eosin channel adjustment is not valid.
-            InvalidEosinBiasRangeError: The bias range for Eosin channel adjustment is not valid.
-            InvalidDabSigmaRangeError: The sigma range for DAB channel adjustment is not valid.
-            InvalidDabBiasRangeError: The bias range for DAB channel adjustment is not valid.
-            InvalidCutoffRangeError: The cutoff range is not valid.
-        """
 
         # Initialize base class.
         super(HedColorAugmentor, self).__init__(p, always_apply)
@@ -96,7 +127,6 @@ class HedColorAugmentor(ImageOnlyTransform):
             InvalidEosinSigmaRangeError: The sigma range for Eosin channel adjustment is not valid.
             InvalidDabSigmaRangeError: The sigma range for DAB channel adjustment is not valid.
         """
-
         # Check the intervals.
         if haematoxylin_sigma_range is not None:
             if (
@@ -147,7 +177,6 @@ class HedColorAugmentor(ImageOnlyTransform):
             InvalidEosinBiasRangeError: The bias range for Eosin channel adjustment is not valid.
             InvalidDabBiasRangeError: The bias range for DAB channel adjustment is not valid.
         """
-
         # Check the intervals.
         if haematoxylin_bias_range is not None:
             if (
@@ -181,7 +210,7 @@ class HedColorAugmentor(ImageOnlyTransform):
 
     def _setcutoffrange(self, cutoff_range):
         """
-        Set the cutoff value. Patches with mean value outside the cutoff interval
+        Set the cutoff value. Patches with mean value outside the cutoff interval \
         will not be augmented.
 
         Args:
@@ -191,7 +220,6 @@ class HedColorAugmentor(ImageOnlyTransform):
         Raises:
             InvalidCutoffRangeError: The cutoff range is not valid.
         """
-
         # Check the interval.
         if cutoff_range is not None:
             if (
@@ -205,7 +233,7 @@ class HedColorAugmentor(ImageOnlyTransform):
         # Store the setting.
         self._cutoff_range = cutoff_range if cutoff_range is not None else [0.0, 1.0]
 
-    def apply(self, patch, **params):
+    def apply(self, patch: np.ndarray, **params) -> np.ndarray:
         """
         Apply color deformation on the patch.
 
@@ -271,11 +299,3 @@ class HedColorAugmentor(ImageOnlyTransform):
         else:
             # The image patch is outside the cutoff interval.
             return patch
-
-
-class InvalidRangeError(Exception):
-    """Raise when the range adjustment is not valid."""
-    def __init__(self, title, range):
-        super().__init__(f"Invalid range of {title}: {range}")
-        self.range = range
-        self.title = title

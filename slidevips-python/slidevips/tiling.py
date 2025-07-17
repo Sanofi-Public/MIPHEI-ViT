@@ -1,3 +1,9 @@
+"""
+Utilities for extracting and ordering tissue tiles from whole slide images.
+
+Provides functions to locate tissue regions using Otsu thresholding or masks and to order tiles.
+"""
+
 from typing import Tuple, List
 
 import cv2
@@ -5,18 +11,22 @@ import numpy as np
 
 
 def get_locs_otsu(thumbnail_or_mask: np.ndarray, slide_dim: Tuple[int, int],
-                           tile_size_lvl0: Tuple[int, int], tile_overlap: int = 0,
-                           mask_thresh: float = 0.) -> Tuple[np.ndarray, np.ndarray]:
+                  tile_size_lvl0: Tuple[int, int], tile_overlap: int = 0,
+                  mask_thresh: float = 0.) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Calculate the positions of tiles based on Otsu thresholding.
+    Calculate the positions of tiles based on Otsu thresholding or a provided mask.
 
+    If the input thumbnail is already a mask (boolean array), it is used directly as the tissue
+    mask. If the thumbnail has more than one channel, a 1D grayscale image is constructed by taking
+    the standard deviation across channels for each pixel. This highlights tissue regions, as
+    background (e.g., white in H&E) has low variance across all RGB channels. Otsu thresholding is
+    then applied to this grayscale image to generate a binary tissue mask.
     Args:
-        thumbnail: The input thumbnail image.
+        thumbnail_or_mask: The input thumbnail image or mask.
         slide_dim: The dimensions of the slide.
         tile_size_lvl0: The size of the tiles at level 0.
         tile_overlap: The overlap between tiles.
         mask_thresh: The threshold for considering a tile as tissue.
-
     Returns:
         tile_positions: The positions of the tiles.
         tissue_percentages: The tissue percentages of the tiles.

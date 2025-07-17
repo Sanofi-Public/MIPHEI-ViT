@@ -1,41 +1,46 @@
+# =============================================================================
+# MIPHEI-ViT main config (Hydra).
+# Defines defaults for data, training, model, and experiment tracking.
+# Modular, override-friendly, and reproducible.
+# Hydra docs: https://hydra.cc/docs/intro/
+# =============================================================================
 defaults:
-  - _self_
-  - data: orion
-  - train: cell
-  - model: unet
+  - _self_  # Inherit from this config file itself
+  - data: orion  # Use the 'orion' data config as base
+  - train: cell  # Use the 'cell' train config as base
+  - model: unet  # Use the 'unet' model config as base
 
 data:
-  slide_dataframe_path: path/to/slide_dataframe.csv
-  train_dataframe_path: path/to/train_dataframe.csv
-  val_dataframe_path: path/to/val_dataframe.csv
-  test_dataframe_path: path/to/test_dataframe.csv
-  augmentation_dir: null
-  channel_stats_path: channel_stats.json
-  targ_channel_names: []
+  slide_dataframe_path: path/to/slide_dataframe.csv  # Path to slide-level dataframe CSV
+  train_dataframe_path: path/to/train_dataframe.csv  # Path to training set patch-level dataframe CSV
+  val_dataframe_path: path/to/val_dataframe.csv  # Path to validation set patch-level dataframe CSV
+  test_dataframe_path: path/to/test_dataframe.csv  # Path to test set patch-level dataframe CSV
+  augmentation_dir: null  # Directory with precomputed augmentation images, cf TileAugmentationCallback (null if unused)
+  channel_stats_path: channel_stats.json  # Path to channel statistics JSON file
+  targ_channel_names: []  # List of target channel names (empty by default)
 
 train:
-  epochs: 20
-  batch_size: 16
-  gan_train: false
-  gan_mode: "structural"
-  learning_rate_d: 0.0002
-  learning_rate_g: 0.0002
-  precision: "16-mixed"
-  foreground_head: false
-  use_cell_metrics: false
-  wandb_project: he-if-image-to-image
-  wandb_note: null
+  epochs: 20  # Number of training epochs
+  batch_size: 16  # Batch size for training
+  gan_train: false  # Whether to use GAN training
+  gan_mode: "vanilla"  # GAN mode (e.g., 'structural', 'vanilla', etc.)
+  learning_rate_d: 0.0002  # Learning rate for discriminator (if GAN used)
+  learning_rate_g: 0.0002  # Learning rate for generator (if GAN used)
+  data_sampler:  # Data sampling configuration
+    use_sampler: False  # Whether to use a data sampler
+  precision: "16-mixed"  # Precision setting (e.g., '16-mixed' for mixed precision)
+  foreground_head: false  # Whether to use a foreground head in the model
+  use_cell_metrics: true  # Whether to compute cell-level metrics
+  wandb_project: he-if-image-to-image  # Weights & Biases project name
+  wandb_note: null  # Optional note for Weights & Biases run (mandatory)
   losses:
-    lambda_factor: 50
-    use_weighted_mae: false
-    adversarial_loss: binary_crossentropy
-    perceptual_loss: false
+    lambda_factor: 50  # Weighting factor for loss components
     cell_loss:
-      use_loss: false
-      use_mse: false
-      use_clustering: false
-      mlp_path: "mlp.ckpt"
+      use_loss: false  # Whether to use cell loss
+      use_mse: false  # Use MSE for cell loss
+      use_clustering: false  # Use clustering for cell loss
+      mlp_path: "mlp.ckpt"  # Path to MLP checkpoint for cell loss
   callbacks:
     modelcheckpoint:
-      mode: min
-      monitor: val_gen_loss_sim
+      mode: min  # Mode for model checkpointing ('min' or 'max')
+      monitor: val_gen_loss_sim  # Metric to monitor for checkpointing

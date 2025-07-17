@@ -1,87 +1,38 @@
-import pyvips
-from omegaconf import OmegaConf
-import json
-import pandas as pd
-from pathlib import Path
-import torch
-import argparse
-from tqdm import tqdm
-from tqdm import tqdm
-from timm.layers import resample_abs_pos_embed
-from timm.layers import resample_patch_embed, resize_rel_pos_bias_table
-import seaborn as sns
-from scipy.stats import pearsonr
-import matplotlib.pyplot as plt
+"""
+Evaluate a model trained on ORION data by analyzing its performance on IMMUcan slides.
 
+This script loads a generator trained on ORION, runs inference on IMMUcan data, and computes
+cell-level marker predictions. Since there is no one-to-one cell mapping between the predicted and
+target sections (due to consecutive tissue sections), we perform correlation analysis between
+predicted and target cell counts within image patches. Biological continuity between consecutive
+sections means a good model should yield high correlation, reflecting similar cell clusters and
+spatial patterns across cuts. Results are saved as CSV files and regression plots are saved in
+checkpoint directory (e.g. "CD8_corr.png").
+"""
+
+import argparse
 import sys
+from pathlib import Path
+
+import pandas as pd
+import torch
+from omegaconf import OmegaConf
+from tqdm import tqdm
+
+import pyvips  # Avoid pyvips import error from src.dataset
+
+from eval_utils import adapt_checkpoint_hemit, correlation_analysis
+
 sys.path.append("../")
-from src.dataset import get_width_height, NormalizationLayer, get_effective_width_height,\
-        TileImg2ImgSlideDataset
+from src.dataset import (
+    get_width_height,
+    NormalizationLayer,
+    get_effective_width_height,
+    TileImg2ImgSlideDataset,
+)
 from src.generators.hemit_models import get_generator_hemit
 from src.metrics import CellMetrics
 
-
-def adapt_checkpoint_hemit(state_dict, model):
-
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if ".downsample.norm" in k or "downsample.reduction" in k:
-            k_split = k.split(".")
-            k_split[2] = str(int(k_split[2]) + 1)
-            new_k = ".".join(k_split)
-        elif 'relative_position_index' in k or 'attn_mask' in k:
-            continue
-        else:
-            new_k = k
-        new_state_dict[new_k] = v
-    
-    state_dict = new_state_dict
-    
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if any([n in k for n in ('relative_position_index', 'attn_mask')]):
-                continue
-
-        if 'swinT.patch_embed.proj.weight' in k:
-            _, _, H, W = model.swinT.patch_embed.proj.weight.shape
-            if v.shape[-2] != H or v.shape[-1] != W:
-                v = resample_patch_embed(
-                    v,
-                    (H, W),
-                    interpolation='bicubic',
-                    antialias=True,
-                    verbose=True,
-                )
-
-        if k.endswith('relative_position_bias_table'):
-            m = model.get_submodule(k[:-29])
-            if v.shape != m.relative_position_bias_table.shape or m.window_size[0] != m.window_size[1]:
-                v = resize_rel_pos_bias_table(
-                    v,
-                    new_window_size=m.window_size,
-                    new_bias_shape=m.relative_position_bias_table.shape,
-                )
-        new_state_dict[k] = v
-
-    return new_state_dict
-
-
-def correlation_analysis(tile_sums, marker_name, figpath):
-    corr, _ = pearsonr(tile_sums[f"{marker_name}_count"], tile_sums[f"{marker_name}_pos_logreg"])
-    formatted_corr = f"{corr:.3f}" if abs(corr) >= 0.01 else f"{corr:.2e}"  # Use scientific notation if small
-
-    sns.regplot(x=tile_sums[f"{marker_name}_count"], y=tile_sums[f"{marker_name}_pos_logreg"],
-                line_kws={'color': 'black'}, color=COLORS[marker_name], ci=None)
-    plt.text(0.05, 0.95, f"Pearson r = {formatted_corr}", transform=plt.gca().transAxes, 
-            fontsize=20, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.5, edgecolor='gray'))
-
-    # Better title without correlation
-    plt.title(f"{marker_name}", fontsize=32)
-    plt.xlabel('Target', fontsize=14)
-    plt.ylabel('Pred', fontsize=14)
-    plt.savefig(figpath, format="png", dpi=300, bbox_inches="tight")
-    plt.close()
-    return corr
 
 COLORS = {"CD3e": "orange",
           "CD8a": "green",
@@ -121,7 +72,6 @@ if __name__ == "__main__":
     print("{} width / {} height".format(width, height))
     print("{} inputs channels / {} output channels".format(nc_in, nc_out))
 
-
     channel_stats_rgb = {"mean": [127.5, 127.5, 127.5], "std": [127.5, 127.5, 127.5]}
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
@@ -139,7 +89,8 @@ if __name__ == "__main__":
                                min_area=20).cuda()
     n_marker = len(cell_metrics.marker_cols)
     logreg = torch.nn.Linear(n_marker, n_marker)
-    logreg_state_dict = torch.load(str(Path(checkpoint_path).parent / "logreg.pth"), map_location="cpu")
+    logreg_state_dict = torch.load(str(Path(checkpoint_path).parent / "logreg.pth"),
+                                   map_location="cpu")
     logreg.load_state_dict(logreg_state_dict)
     logreg.eval()
 
@@ -151,7 +102,7 @@ if __name__ == "__main__":
     batch_size = 4
     device = "cpu"
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, pin_memory=device!="cpu",
+        dataset, batch_size=batch_size, pin_memory=device != "cpu",
         shuffle=False, drop_last=False, num_workers=num_workers
     )
 
@@ -162,8 +113,8 @@ if __name__ == "__main__":
         with torch.inference_mode():
             out = generator(x)
             # scale output in [-0.9, 0.9] to match cell_metrics input
-            out = (out  + 1) / 2 # [-1, 1] -> [0, 1]
-            out = out * 1.8 - 0.9 # [0, 1] -> [-0.9, 0.9]
+            out = (out + 1) / 2  # [-1, 1] -> [0, 1]
+            out = out * 1.8 - 0.9  # [0, 1] -> [-0.9, 0.9]
             out = out.float()
         cell_metrics.update(out, nuclei_masks, tile_names)
 
@@ -188,7 +139,7 @@ if __name__ == "__main__":
     corr_results = []
     for marker_name in COLORS.keys():
         figpath = str(Path(checkpoint_path).parent / f"{marker_name}_corr.png")
-        corr = correlation_analysis(tile_sums, marker_name, figpath)
+        corr = correlation_analysis(tile_sums, marker_name, figpath, COLORS)
         corr_results.append([marker_name, corr])
     corr_results_df = pd.DataFrame(columns=["Marker", "Pearson"], data=corr_results)
     corr_results_df.to_csv(str(Path(checkpoint_path).parent / "immucan_corr.csv"), index=False)

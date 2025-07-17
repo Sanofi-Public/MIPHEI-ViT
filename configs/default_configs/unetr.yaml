@@ -14,7 +14,7 @@ train:
   wandb_note: "foundation_model_hoptimus"
 
 model:
-  model_name: "unet_lora"
+  model_name: "unetr_lora"
   encoder:
     encoder_name: hoptimus0
     encoder_weights: null # null means foundation model encoder for unetr

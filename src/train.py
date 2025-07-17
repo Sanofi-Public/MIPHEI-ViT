@@ -1,40 +1,68 @@
 """
-Training scripts for image to image segmentation.
+Train a model for H&E to mIF image translation.
+
+Used by run.py.
 """
+
 import logging
-logging.getLogger('pyvips').setLevel(logging.WARNING)
-
 import os
-os.environ['VIPS_CONCURRENCY'] = '1'
-import pyvips
-
-from omegaconf import OmegaConf
 import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
+import torch
+from omegaconf import DictConfig, OmegaConf
+from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
-from pytorch_lightning import Trainer
 import wandb
-import torch
 
-from .dataset import NormalizationLayer, get_augmentations, DataModule,\
-                     BalancedPositiveSampler, get_width_height, get_effective_width_height,\
-                     get_input_mean_std
+import pyvips  # Avoid pyvips import error from src.dataset
+
+from .dataset import (
+    NormalizationLayer,
+    DataModule,
+    BalancedPositiveSampler,
+    get_width_height,
+    get_effective_width_height,
+    get_input_mean_std,
+)
 from .metrics import CellMetrics
 from .models import ModelModule, DiscriminatorPatch
-from .utils import wandb_log_artifact, get_foreground_weight, update_wandb_note
-from .callbacks import WandbVisCallback, CustomModelCheckpoint, SlideAugentationCallback, SwitchGenDiscTrain,\
-                       DebugImageLogger, TileAugentationCallback
-from .loss import WeightedMSELoss, get_mse_loss, get_focal_loss, CellLoss
+from .utils import wandb_log_artifact, update_wandb_note
+from .callbacks import (
+    WandbVisCallback,
+    SlideAugmentationCallback,
+    DebugImageLogger,
+    TileAugmentationCallback,
+)
+from .loss import WeightedMSELoss, CellLoss
 from .generators import get_generator
 
 
-def train_patchgan(cfg, logdir):
+def train_miphei(cfg: DictConfig, logdir: str) -> None:
+    """
+    Train a MIPHEI model using the provided configuration and logging directory.
+
+    This function sets up data loaders, model components (generator, discriminator), loss functions,
+    and training callbacks for a MIPHEI-based image-to-image translation task. It supports various
+    loss types, data sampling strategies, and logging with Weights & Biases (wandb). The function
+    also handles model checkpointing and optional cell metrics computation.
+    Args:
+        cfg (omegaconf.DictConfig): Hydra configuration object from configs folder containing all
+            training, data, and model parameters.
+        logdir (str or Path): Directory path for saving logs, checkpoints, and configuration files.
+    Raises:
+        FileNotFoundError: If any of the required data files specified in the configuration are
+            missing.
+        ValueError: If configuration parameters are invalid or inconsistent.
+    Returns:
+        None
+    """
+    logging.getLogger('pyvips').setLevel(logging.WARNING)  # Suppress pyvips useless warnings
     log = logging.getLogger(__name__)
     log.info(OmegaConf.to_yaml(cfg))
-    pyvips.cache_set_max(0)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log.info("device: {}".format(device))
 
@@ -64,10 +92,9 @@ def train_patchgan(cfg, logdir):
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
     channel_names = cfg.data.targ_channel_names
-    targ_channel_idxs = [channel_stats[channel_name]["idx_channel"] \
+    targ_channel_idxs = [channel_stats[channel_name]["idx_channel"]
                          for channel_name in channel_names]
-    stats_list_if = [channel_stats[channel_name] for channel_name in channel_names].copy()
-    preprocess_target_fn = NormalizationLayer(stats_list_if, mode="if")
+    preprocess_target_fn = NormalizationLayer(mode="if")
 
     sampler_cfg = cfg.train.data_sampler
     if sampler_cfg.use_sampler:
@@ -78,11 +105,11 @@ def train_patchgan(cfg, logdir):
         train_sampler = None
 
     data_module = DataModule(
-        slide_dataframe=slide_dataframe, train_dataframe=train_dataframe, 
+        slide_dataframe=slide_dataframe, train_dataframe=train_dataframe,
         val_dataframe=val_dataframe, test_dataframe=test_dataframe,
         targ_channel_idxs=targ_channel_idxs, from_slide=from_slide,
         input_shape=(width, height),
-        batch_size=cfg.train.batch_size, pin_memory=device!="cpu",
+        batch_size=cfg.train.batch_size, pin_memory=device != "cpu",
         return_nuclei=cfg.train.use_cell_metrics, train_sampler=train_sampler,
         preprocess_input_fn=preprocess_input_fn, preprocess_target_fn=preprocess_target_fn,
         )
@@ -100,8 +127,11 @@ def train_patchgan(cfg, logdir):
     if os.name == 'nt':
         jit_compile = False
     else:
-        #generator = torch.compile(generator)
-        #jit_compile = True
+        # generator = torch.compile(generator, mode="max-autotune")
+
+        # only on encoder, because it can generate out of memory on GPU
+        # allows to accelerate training
+        generator.encoder = torch.compile(generator.encoder, mode="max-autotune")
         jit_compile = False
 
     ckpt_weights = str(logdir / "model.weights")
@@ -113,34 +143,17 @@ def train_patchgan(cfg, logdir):
     else:
         cell_metrics = None
 
-
     lambda_factor = cfg.train.losses.lambda_factor
-    if cfg.train.losses.use_weighted_mae:
-        if sampler_cfg.use_sampler:
-            indices = train_sampler.create_indices()
-            foreground_weight = get_foreground_weight(
-                channel_names, train_sampler.dataframe.take(indices))
-        else:
-            foreground_weight = get_foreground_weight(
-                channel_names, train_dataframe)
-        foreground_weight = np.float32(foreground_weight)
-        foreground_weight = torch.tensor(foreground_weight).reshape((1, -1, 1, 1)).to(device)
-        foreground_thresh = preprocess_target_fn(0)
-
-        print("foreground_weight", foreground_weight.cpu().numpy().flatten().tolist(),
-            "foreground_thresh", foreground_thresh.flatten().tolist())
-        #loss_reconstruct = get_weighted_mae_loss(lambda_factor, foreground_weight, foreground_thresh)
-        loss_reconstruct = get_focal_loss(lambda_factor, foreground_weight)
-        #loss_reconstruct = get_shrinkage_loss(lambda_factor, foreground_weight)
-    else:
-        #loss_reconstruct = get_mse_loss(lambda_factor)
-        marker_weights = torch.Tensor([channel_stats[channel_name]["std"] \
-                         for channel_name in channel_names])
-        marker_weights = 1 / marker_weights
-        marker_weights = marker_weights / marker_weights.min()
-        print(marker_weights)
-        loss_reconstruct = WeightedMSELoss(lambda_factor, marker_weights)
-        #loss_reconstruct = L1_L2_Loss(lambda_factor=10.)
+    # loss_reconstruct = get_mse_loss(lambda_factor)
+    # loss_reconstruct = get_focal_loss(lambda_factor, marker_weights)
+    # loss_reconstruct = get_focal_loss(lambda_factor, marker_weights)
+    # loss_reconstruct = L1_L2_Loss(lambda_factor=10.)
+    marker_weights = torch.Tensor([channel_stats[channel_name]["std"] ** 2
+                                   for channel_name in channel_names])  # Channel variances
+    marker_weights = 1 / marker_weights
+    marker_weights = marker_weights / marker_weights.min()
+    print(marker_weights)
+    loss_reconstruct = WeightedMSELoss(lambda_factor, marker_weights)
 
     cell_loss_params = cfg.train.losses.cell_loss
     if cell_loss_params.use_loss:
@@ -150,22 +163,23 @@ def train_patchgan(cfg, logdir):
     else:
         cell_loss = None
 
-    #foreground_loss = CombinedBCEAndDiceLoss(1.)
+    # foreground_loss = CombinedBCEAndDiceLoss(1.)
     gan_train = cfg.train.gan_train
     selected_channels = [
         channel_stats[channel_name]["is_structural"] for channel_name in channel_names] \
-            if cfg.train.gan_mode == "stuctural" else None
+        if cfg.train.gan_mode == "structural" else None
     discriminator = DiscriminatorPatch(
             input_nc=nc_out + nc_in, norm_layer_type=None,
             selected_channels=selected_channels) if gan_train else None
 
-    pl_model = ModelModule(generator=generator, discriminator=discriminator,
-                     lr_g=cfg.train.learning_rate_g * np.sqrt(cfg.train.batch_size),
-                     lr_d=cfg.train.learning_rate_d * np.sqrt(cfg.train.batch_size),
-                     cell_metrics=cell_metrics,
-                     cell_loss=cell_loss,
-                     loss_reconstruct=loss_reconstruct,
-                     gan_train=gan_train)
+    pl_model = ModelModule(
+        generator=generator, discriminator=discriminator,
+        lr_g=cfg.train.learning_rate_g * np.sqrt(cfg.train.batch_size),
+        lr_d=cfg.train.learning_rate_d * np.sqrt(cfg.train.batch_size),
+        cell_metrics=cell_metrics,
+        cell_loss=cell_loss,
+        loss_reconstruct=loss_reconstruct,
+        gan_train=gan_train)
 
     logger_name = logdir.name
     wandb_note = cfg.train.wandb_note
@@ -190,13 +204,13 @@ def train_patchgan(cfg, logdir):
             mode=config_callback.modelcheckpoint.mode, save_last=False,
             save_weights_only=True, verbose=1),
         WandbVisCallback(preprocess_input_fn.unormalize, num_samples=4),
-        #SwitchGenDiscTrain()
+        # SwitchGenDiscTrain()
     ]
     if cfg.data.augmentation_dir is not None:
         if from_slide:
-            callbacks.append(SlideAugentationCallback(cfg.data.augmentation_dir, prob=0.25))
+            callbacks.append(SlideAugmentationCallback(cfg.data.augmentation_dir, prob=0.25))
         else:
-            callbacks.append(TileAugentationCallback(cfg.data.augmentation_dir, prob=0.25))
+            callbacks.append(TileAugmentationCallback(cfg.data.augmentation_dir, prob=0.25))
 
     pl_model = pl_model.to(device)
     if jit_compile:
@@ -204,7 +218,7 @@ def train_patchgan(cfg, logdir):
 
     trainer = Trainer(max_epochs=cfg.train.epochs, callbacks=callbacks, logger=logger,
                       accelerator="gpu", precision=cfg.train.precision, devices=1,
-                      )#limit_train_batches=100, limit_val_batches=100, limit_test_batches=100)
+                      )  # limit_train_batches=100, limit_val_batches=100, limit_test_batches=100)
     trainer.fit(pl_model, train_dataloader, val_dataloader)
     trainer.test(pl_model, test_dataloader, ckpt_path=ckpt_weights + ".ckpt", verbose=True)
     wandb.finish()

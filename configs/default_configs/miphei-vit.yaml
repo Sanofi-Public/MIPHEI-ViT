@@ -14,7 +14,7 @@ train:
   wandb_note: "miphei_vit"
 
 model:
-  model_name: myvitmatte
+  model_name: mipheivit
   encoder:
     encoder_name: hoptimus0
     encoder_weights: null # null means foundation model encoder for vitmatte

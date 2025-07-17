@@ -1,101 +1,41 @@
-import pyvips
-from omegaconf import OmegaConf
-import json
-import pandas as pd
-from pathlib import Path
-import torch
+"""
+Evaluate a model trained on ORION data by analyzing its performance on IMMUcan slides.
+
+This script loads a generator trained on ORION, runs inference on IMMUcan data, and computes
+cell-level marker predictions. Since there is no one-to-one cell mapping between the predicted and
+target sections (due to consecutive tissue sections), we perform correlation analysis between
+predicted and target cell counts within image patches. Biological continuity between consecutive
+sections means a good model should yield high correlation, reflecting similar cell clusters and
+spatial patterns across cuts. Results are saved as CSV files and regression plots are saved in
+checkpoint directory (e.g. "CD8_corr.png").
+"""
+
 import argparse
-from tqdm import tqdm
-from tqdm import tqdm
-from timm.layers import resample_abs_pos_embed
-from timm.layers import resample_patch_embed, resize_rel_pos_bias_table
-import seaborn as sns
-from scipy.stats import pearsonr
-import matplotlib.pyplot as plt
-
+import json
 import sys
+from pathlib import Path
+
+import pandas as pd
+import torch
+from omegaconf import OmegaConf
+from tqdm import tqdm
+
+import pyvips  # Avoid pyvips import error from src.dataset
+
+from eval_utils import correlation_analysis
+
 sys.path.append("../")
-from src.dataset import get_width_height, NormalizationLayer, get_effective_width_height,\
-        TileImg2ImgSlideDataset, get_input_mean_std
+from src.dataset import (
+    get_width_height,
+    NormalizationLayer,
+    get_effective_width_height,
+    TileImg2ImgSlideDataset,
+    get_input_mean_std,
+)
 from src.generators import get_generator
+from src.generators.hemit_models import resize_embed_hemit_statedict
 from src.metrics import CellMetrics
-
-
-def validate_load_info(load_info):
-    """
-    Validates the result of model.load_state_dict(..., strict=False).
-
-    Raises:
-        ValueError if unexpected keys are found,
-        or if missing keys are not related to the allowed encoder modules.
-    """
-    # 1. Raise if any unexpected keys
-    if load_info.unexpected_keys:
-        raise ValueError(f"Unexpected keys in state_dict: {load_info.unexpected_keys}")
-
-    # 2. Raise if any missing keys are not part of allowed encoder modules
-    for key in load_info.missing_keys:
-        if ".lora" in key:
-            raise ValueError(f"Missing LoRA checkpoint in state_dict: {key}")
-        elif not any(part in key for part in ["encoder.vit.", "encoder.model."]):
-            raise ValueError(f"Missing key in state_dict: {key}")
-
-
-def resize_embed_hemit_statedict(state_dict, model):
-    
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if any([n in k for n in ('relative_position_index', 'attn_mask')]):
-                continue
-
-        if 'swinT.patch_embed.proj.weight' in k:
-            _, _, H, W = model.swinT.patch_embed.proj.weight.shape
-            if v.shape[-2] != H or v.shape[-1] != W:
-                v = resample_patch_embed(
-                    v,
-                    (H, W),
-                    interpolation='bicubic',
-                    antialias=True,
-                    verbose=True,
-                )
-
-        if k.endswith('relative_position_bias_table'):
-            m = model.get_submodule(k[:-29])
-            if v.shape != m.relative_position_bias_table.shape or m.window_size[0] != m.window_size[1]:
-                v = resize_rel_pos_bias_table(
-                    v,
-                    new_window_size=m.window_size,
-                    new_bias_shape=m.relative_position_bias_table.shape,
-                )
-        new_state_dict[k] = v
-
-    return new_state_dict
-
-
-def get_generator_state_dict(state_dict):
-    generator_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("generator."):
-            generator_state_dict[k.replace("generator.", "")] = v
-    return generator_state_dict
-
-
-def correlation_analysis(tile_sums, marker_name, figpath):
-    corr, _ = pearsonr(tile_sums[f"{marker_name}_count"], tile_sums[f"{marker_name}_pos_logreg"])
-    formatted_corr = f"{corr:.3f}" if abs(corr) >= 0.01 else f"{corr:.2e}"  # Use scientific notation if small
-
-    sns.regplot(x=tile_sums[f"{marker_name}_count"], y=tile_sums[f"{marker_name}_pos_logreg"],
-                line_kws={'color': 'black'}, color=COLORS[marker_name], ci=None)
-    plt.text(0.05, 0.95, f"Pearson r = {formatted_corr}", transform=plt.gca().transAxes, 
-            fontsize=20, verticalalignment='top', bbox=dict(facecolor='white', alpha=0.5, edgecolor='gray'))
-
-    # Better title without correlation
-    plt.title(f"{marker_name}", fontsize=32)
-    plt.xlabel('Target', fontsize=14)
-    plt.ylabel('Pred', fontsize=14)
-    plt.savefig(figpath, format="png", dpi=300, bbox_inches="tight")
-    plt.close()
-    return corr
+from src.utils import validate_load_info, get_generator_state_dict
 
 COLORS = {"CD3e": "orange",
           "CD8a": "green",
@@ -116,7 +56,8 @@ if __name__ == "__main__":
 
     cfg = OmegaConf.load(config_path)
     cfg_data = OmegaConf.load(DATASET_CONFIG_PATH)
-    for key in ["slide_dataframe_path", "train_dataframe_path", "val_dataframe_path", "test_dataframe_path", "channel_stats_path"]:
+    for key in ["slide_dataframe_path", "train_dataframe_path", "val_dataframe_path",
+                "test_dataframe_path", "channel_stats_path"]:
         if key in cfg_data.data:
             cfg.data[key] = cfg_data.data[key]
 
@@ -126,7 +67,8 @@ if __name__ == "__main__":
     dataframe["target_path"] = dataframe["image_path"]
     # trick to make cell metric compatible with our cell count analysis
     slide_dataframe = pd.DataFrame()
-    slide_dataframe["in_slide_name"] = dataframe["image_path"].apply(lambda x: Path(x).stem).tolist()
+    slide_dataframe["in_slide_name"] = dataframe["image_path"].apply(
+        lambda x: Path(x).stem).tolist()
     slide_dataframe["nuclei_csv_path"] = None
 
     with open(Path("..") / cfg.data.channel_stats_path, "r") as f:
@@ -139,7 +81,6 @@ if __name__ == "__main__":
     nc_in = 3
     print("{} width / {} height".format(width, height))
     print("{} inputs channels / {} output channels".format(nc_in, nc_out))
-
 
     channel_stats_rgb = get_input_mean_std(cfg, channel_stats["RGB"])
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
@@ -162,7 +103,7 @@ if __name__ == "__main__":
         print("Loading checkpoint from ckpt")
     if hasattr(generator, "swinT"):
         state_dict = resize_embed_hemit_statedict(state_dict, generator)
-    
+
     load_info = generator.load_state_dict(state_dict, strict=strict_load)
     if use_safetensors:
         validate_load_info(load_info)
@@ -184,7 +125,7 @@ if __name__ == "__main__":
     batch_size = 4
     device = "cpu"
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, pin_memory=device!="cpu",
+        dataset, batch_size=batch_size, pin_memory=device != "cpu",
         shuffle=False, drop_last=False, num_workers=num_workers
     )
 
@@ -217,7 +158,7 @@ if __name__ == "__main__":
     corr_results = []
     for marker_name in COLORS.keys():
         figpath = str(Path(checkpoint_path).parent / f"{marker_name}_corr.png")
-        corr = correlation_analysis(tile_sums, marker_name, figpath)
+        corr = correlation_analysis(tile_sums, marker_name, figpath, COLORS)
         corr_results.append([marker_name, corr])
     corr_results_df = pd.DataFrame(columns=["Marker", "Pearson"], data=corr_results)
     corr_results_df.to_csv(str(Path(checkpoint_path).parent / "immucan_corr.csv"), index=False)

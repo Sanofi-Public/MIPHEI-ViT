@@ -1,26 +1,91 @@
 """
-Model classes for image to image segmentation.
+Model classes for image to image translation.
+
+Used here to define Lightning Module to predict mIF from H&E images.
+Contain also the discriminator module for GAN training.
+The model module allows the implementation of a Pix2Pix-like architecture.
 """
 
 import functools
 from pathlib import Path
+from typing import Optional
+
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
-from torchmetrics import MetricCollection, Dice
-from torchmetrics.classification import BinaryPrecision, BinaryRecall
-
-from .loss import FocalLoss, CellClusterLoss
 from torch.nn.utils import spectral_norm
-from .utils import pix2pix_lr_scheduler, get_vit_lr_decay_rate, MeanCellExtrator
-from .generators.unet import ViTPyramidEncoder
+from torchmetrics import MetricCollection
+from torchmetrics.classification import BinaryPrecision, BinaryRecall
+from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
+
+from .loss import FocalLoss
+from .utils import MeanCellExtrator, pix2pix_lr_scheduler  # get_vit_lr_decay_rate
+# from .generators.unetr import ViTPyramidEncoder
 
 
 class ModelModule(pl.LightningModule):
-    def __init__(self, generator, discriminator, lr_g, lr_d,
-                 loss_reconstruct, cell_metrics=None, cell_loss=None, gan_train=False):
+    """
+    PyTorch Lightning module for training and evaluating image-to-image translation models, \
+    optionally with GAN and cell-level metrics support.
+
+    This module encapsulates the training, validation, and testing logic for a generator
+    (possibly with a foreground segmentation head) and an optional discriminator. It supports
+    pixel-level metrics (PSNR, SSIM), adversarial training (Pix2Pix), perceptual loss, and
+    cell-level metrics for biological image analysis.
+    Args:
+        generator (nn.Module): The generator network.
+        discriminator (nn.Module): The discriminator network.
+        lr_g (float): Learning rate for the generator.
+        lr_d (float): Learning rate for the discriminator.
+        loss_reconstruct (callable): Reconstruction loss function.
+        cell_metrics (optional): Metrics for cell-level evaluation.
+        cell_loss (optional): Loss function for cell-level evaluation.
+        gan_train (bool): Whether to enable GAN training.
+    Attributes:
+        generator (nn.Module): The generator network.
+        discriminator (nn.Module or None): The discriminator network (if GAN training is enabled).
+        lr_g (float): Learning rate for the generator.
+        lr_d (float): Learning rate for the discriminator.
+        loss_reconstruct (callable): Reconstruction loss function.
+        cell_metrics (optional): Metrics for cell-level evaluation.
+        use_cell_metrics (bool): Whether to use cell-level metrics.
+        cell_loss (optional): Loss function for cell-level evaluation.
+        mean_cell_extractor (optional): Extractor for mean cell values.
+        gan_train (bool): Whether to enable GAN training.
+        perceptual_loss_fn (optional): Perceptual loss function.
+        train_pix_metrics (MetricCollection): Pixel-level metrics for training.
+        train_disc_metrics (MetricCollection): Discriminator metrics for training.
+        val_pix_metrics (MetricCollection): Pixel-level metrics for validation.
+        val_disc_metrics (MetricCollection): Discriminator metrics for validation.
+        test_pix_metrics (MetricCollection): Pixel-level metrics for testing.
+        test_disc_metrics (MetricCollection): Discriminator metrics for testing.
+        logreg_layer (nn.Linear): Logistic regression layer for cell-level metrics.
+        is_lsgan (bool): Whether to use least squares GAN loss.
+    Methods:
+        forward(inputs): Forward pass through the generator.
+        predict_step(batch, batch_idx): Inference step for prediction.
+        adversarial_loss(target, input): Computes adversarial loss (BCE or MSE).
+        training_step(batch, batch_idx): Training logic for generator and discriminator.
+        on_train_epoch_end(): Computes and logs training metrics at epoch end.
+        evaluation_step(batch, batch_idx, prefix): Shared logic for validation and test steps.
+        validation_step(batch, batch_idx): Validation step for Lightning.
+        test_step(batch, batch_idx): Test step for Lightning.
+        epoch_end_cell_metrics(prefix, logreg_layer=None, return_dataframe=False): Computes and
+            logs cell metrics.
+        on_validation_epoch_end(): Computes and logs validation metrics at epoch end.
+        on_test_epoch_end(): Computes and logs test metrics at epoch end.
+        configure_optimizers(): Configures optimizers and schedulers for generator and
+            discriminator.
+        _log_train_metric(metric_name, metric_value): Helper to log training metrics.
+        _log_val_metric(metric_name, metric_value): Helper to log validation metrics.
+    Raises:
+        ValueError: If NaN values are detected in the generator output during training.
+    """
+
+    def __init__(self, generator: nn.Module, discriminator: nn.Module, lr_g: float, lr_d: float,
+                 loss_reconstruct, cell_metrics: bool = None, cell_loss=None,
+                 gan_train: bool = False):
         super().__init__()
         self.generator = generator
         self.foreground_head = hasattr(generator, "foreground_head")
@@ -65,31 +130,38 @@ class ModelModule(pl.LightningModule):
         self.lr_d = lr_d
         self.loss_reconstruct = loss_reconstruct
 
-        if hasattr(self.generator, "encoder"):
+        """
+        # DEPRECATED
+        if hasattr(self.generator, "encoder"):  # DEPRECATED
             self.vit_lr_decay = isinstance(self.generator.encoder, ViTPyramidEncoder) and \
                 all(param.requires_grad for param in self.generator.encoder.model.parameters())
         else:
             self.vit_lr_decay = False
+        """
         self.is_lsgan = False
 
-    def forward(self, inputs):
+    def forward(self, inputs: torch.Tensor):
+        """Pass inputs through the generator network."""
         return self.generator(inputs)
 
-    def predict_step(self, batch, batch_idx):
+    def predict_step(self, batch: dict, batch_idx: int):
+        """Inference step for prediction."""
         return self.generator(batch["image"])
 
-    def adversarial_loss(self, target, input):
+    def adversarial_loss(self, target: torch.Tensor, input: torch.Tensor) -> torch.Tensor:
+        """Compute adversarial loss using either LSGAN (MSE) or standard GAN (BCE)."""
         if self.is_lsgan:
             return F.mse_loss(target=target, input=input)
         else:
             return F.binary_cross_entropy_with_logits(target=target, input=input)
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch: dict, batch_idx: int) -> None:
+        """Perform a single training step for the Lightning module."""
         x, y = batch["image"], batch["target"]
 
         if self.gan_train:
             g_optimizer, d_optimizer = self.optimizers()
-            g_scheduler, d_scheduler  = self.lr_schedulers()
+            g_scheduler, d_scheduler = self.lr_schedulers()
         else:
             g_optimizer = self.optimizers()
             g_scheduler = self.lr_schedulers()
@@ -106,7 +178,7 @@ class ModelModule(pl.LightningModule):
         # Generator step
         if self.gan_train:
             disc_output_fake = self.discriminator(x, fake_images)
-            misleading_labels = torch.zeros(disc_output_fake.shape).type_as(x) # ones
+            misleading_labels = torch.zeros(disc_output_fake.shape).type_as(x)
             gen_adv_loss = self.adversarial_loss(target=misleading_labels, input=disc_output_fake)
         else:
             gen_adv_loss = 0.
@@ -128,8 +200,8 @@ class ModelModule(pl.LightningModule):
             target_foreground = (y > -0.9).type_as(y)
             """target_foreground = F.max_pool2d(
                 target_foreground, 5, stride=1, padding=2)"""
-            gen_foreground_loss = self.foreground_loss(target=target_foreground,
-                                                    input=foreground_preds)
+            gen_foreground_loss = self.foreground_loss(
+                target=target_foreground, input=foreground_preds)
             gen_loss = gen_loss + gen_foreground_loss
         g_optimizer.zero_grad()
         self.manual_backward(gen_loss)
@@ -141,10 +213,9 @@ class ModelModule(pl.LightningModule):
             y_clip = y.contiguous()
             fake_images_clip = fake_images.contiguous().clip(-0.9, 0.9)
             self.train_pix_metrics.update(fake_images_clip, y_clip)
-            #if self.foreground_head:
-                #foreground_pred_class = F.sigmoid(foreground_preds) > 0.5
-                #dice_value = self.dice_metric(foreground_pred_class, y_clip > -0.9)
-
+            # if self.foreground_head:
+            #    foreground_pred_class = F.sigmoid(foreground_preds) > 0.5
+            #    dice_value = self.dice_metric(foreground_pred_class, y_clip > -0.9)
 
         # Discriminator step
         if self.gan_train:
@@ -155,11 +226,11 @@ class ModelModule(pl.LightningModule):
             disc_output_real = self.discriminator(
                 x, y)
 
-            fake_labels = torch.ones(disc_output_fake.shape).type_as(x) # zeros
+            fake_labels = torch.ones(disc_output_fake.shape).type_as(x)
             fake_labels = fake_labels + 0.05 * torch.rand(fake_labels.shape).type_as(x)
             fake_labels = torch.clip(fake_labels, 0., 1.)
             disc_fake_adv_loss = self.adversarial_loss(target=fake_labels, input=disc_output_fake)
-            real_labels = torch.zeros(disc_output_real.shape).type_as(x) # ones
+            real_labels = torch.zeros(disc_output_real.shape).type_as(x)
             real_labels = real_labels + 0.05 * torch.rand(real_labels.shape).type_as(x)
             real_labels = torch.clip(real_labels, 0., 1.)
             disc_real_adv_loss = self.adversarial_loss(target=real_labels, input=disc_output_real)
@@ -177,42 +248,48 @@ class ModelModule(pl.LightningModule):
                     disc_pred = F.sigmoid(disc_output) > 0.5
                     real_labels = torch.concat(
                         [
-                            torch.ones(disc_output_fake.shape).type_as(x), # zeros
-                            torch.zeros(disc_output_real.shape).type_as(x), # ones
+                            torch.ones(disc_output_fake.shape).type_as(x),
+                            torch.zeros(disc_output_real.shape).type_as(x),
                         ],
                         axis=0,
                     )
                     self.train_disc_metrics.update(disc_pred, real_labels)
 
-
         # Log metrics (includes the metric that tracks the loss)
         self.log('lr', g_scheduler.get_last_lr()[0], on_step=True,
                  on_epoch=False, prog_bar=False, logger=True)
-        self.log("gen_loss_sim_step", gen_loss_sim, on_step=True, on_epoch=False, prog_bar=True, logger=False)
+        self.log("gen_loss_sim_step", gen_loss_sim, on_step=True, on_epoch=False,
+                 prog_bar=True, logger=False)
         self.log("train_gen_loss", gen_loss, on_step=False, on_epoch=True, logger=True)
         self.log("train_gen_loss_sim", gen_loss_sim, on_step=False, on_epoch=True, logger=True)
-        
+
         if self.gan_train:
             self.log("train_gen_adv_loss", gen_adv_loss, on_step=False, on_epoch=True, logger=True)
-            self.log("train_disc_adv_loss_step", disc_adv_loss, on_step=True, on_epoch=False, prog_bar=True, logger=False)
-            self.log("train_disc_adv_loss", disc_adv_loss, on_step=False, on_epoch=True, logger=True)
+            self.log("train_disc_adv_loss_step", disc_adv_loss, on_step=True, on_epoch=False,
+                     prog_bar=True, logger=False)
+            self.log("train_disc_adv_loss", disc_adv_loss, on_step=False, on_epoch=True,
+                     logger=True)
 
         if self.use_cell_metrics and (self.cell_loss is not None):
-            self.log("train_loss_cell", loss_cell_value, on_step=False, on_epoch=True, logger=True, prog_bar=True)
+            self.log("train_loss_cell", loss_cell_value, on_step=False, on_epoch=True,
+                     logger=True, prog_bar=True)
         if self.foreground_head:
-            self.log("train_gen_foreground_loss", gen_foreground_loss, on_step=False, on_epoch=True, logger=True)
+            self.log("train_gen_foreground_loss", gen_foreground_loss, on_step=False,
+                     on_epoch=True, logger=True)
         if self.perceptual_loss_fn:
             self.log("train_loss_p", loss_p, on_step=False, on_epoch=True, logger=True)
 
     def on_train_epoch_end(self):
-        #self.log_dict(out_pix_metrics, on_step=False, on_epoch=True, logger=True)
+        """Handle end-of-epoch training logic by logging and resetting metrics."""
+        # self.log_dict(out_pix_metrics, on_step=False, on_epoch=True, logger=True)
         self.log_dict(self.train_pix_metrics.compute())
         self.log_dict(self.train_disc_metrics.compute())
         self.train_pix_metrics.reset()
         self.train_disc_metrics.reset()
         super().on_train_epoch_end()
 
-    def evaluation_step(self, batch, batch_idx, prefix):
+    def evaluation_step(self, batch: dict, batch_idx: int, prefix: str) -> None:
+        """Perform a single evaluation step for the Lightning module."""
         x, y = batch["image"], batch["target"]
 
         if self.foreground_head:
@@ -223,7 +300,7 @@ class ModelModule(pl.LightningModule):
         # Generator step
         if self.gan_train:
             disc_output_fake = self.discriminator(x, fake_images)
-            misleading_labels = torch.zeros(disc_output_fake.shape).type_as(x) # ones
+            misleading_labels = torch.zeros(disc_output_fake.shape).type_as(x)
             gen_adv_loss = self.adversarial_loss(target=misleading_labels, input=disc_output_fake)
         else:
             gen_adv_loss = 0.
@@ -243,12 +320,10 @@ class ModelModule(pl.LightningModule):
         if self.perceptual_loss_fn:
             loss_p = self.perceptual_loss_fn.forward(
                 fake_images.contiguous(), y.contiguous())
-            gen_loss = gen_loss +  0.1 * loss_p
+            gen_loss = gen_loss + 0.1 * loss_p
 
         if self.foreground_head:
             target_foreground = (y > -0.9).type_as(y)
-            """target_foreground = F.max_pool2d(
-                target_foreground, 5, stride=1, padding=2)"""
             gen_foreground_loss = self.foreground_loss(
                 target=target_foreground, input=foreground_preds)
             gen_loss = gen_loss + gen_foreground_loss
@@ -258,9 +333,9 @@ class ModelModule(pl.LightningModule):
             fake_images_clip = fake_images.contiguous().clip(-0.9, 0.9)
             getattr(self, f"{prefix}_pix_metrics").update(fake_images_clip, y_clip)
 
-            #if self.foreground_head:
-                #foreground_pred_class = F.sigmoid(foreground_preds) > 0.5
-                #dice_value = self.dice_metric(foreground_pred_class, y_clip > -0.9)
+            # if self.foreground_head:
+            #    foreground_pred_class = F.sigmoid(foreground_preds) > 0.5
+            #    dice_value = self.dice_metric(foreground_pred_class, y_clip > -0.9)
 
         # Discriminator step
         if self.gan_train:
@@ -268,8 +343,8 @@ class ModelModule(pl.LightningModule):
             disc_output = torch.concat([disc_output_fake, disc_output_real], axis=0)
             labels = torch.concat(
                 [
-                    torch.ones(disc_output_fake.shape).type_as(x), # zeros
-                    torch.zeros(disc_output_real.shape).type_as(x), # ones
+                    torch.ones(disc_output_fake.shape).type_as(x),
+                    torch.zeros(disc_output_real.shape).type_as(x),
                 ],
                 axis=0,
             )
@@ -277,27 +352,38 @@ class ModelModule(pl.LightningModule):
             if not self.is_lsgan:
                 with torch.no_grad():
                     getattr(self, f"{prefix}_disc_metrics").update(disc_output, labels)
-            self.log(f"{prefix}_disc_adv_loss", disc_adv_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            self.log(f"{prefix}_disc_adv_loss", disc_adv_loss, on_step=False, on_epoch=True,
+                     prog_bar=True, logger=True)
 
-        self.log(f"{prefix}_gen_adv_loss", gen_adv_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log(f"{prefix}_gen_loss", gen_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        self.log(f"{prefix}_gen_loss_sim", gen_loss_sim, on_step=False, on_epoch=True, prog_bar=True, logger=True)
-
+        self.log(f"{prefix}_gen_adv_loss", gen_adv_loss, on_step=False, on_epoch=True,
+                 prog_bar=True, logger=True)
+        self.log(f"{prefix}_gen_loss", gen_loss, on_step=False, on_epoch=True,
+                 prog_bar=True, logger=True)
+        self.log(f"{prefix}_gen_loss_sim", gen_loss_sim, on_step=False, on_epoch=True,
+                 prog_bar=True, logger=True)
 
         if self.use_cell_metrics and (self.cell_loss is not None):
-            self.log(f"{prefix}_loss_cell", loss_cell_value, on_step=False, on_epoch=True, logger=True, prog_bar=True)
+            self.log(f"{prefix}_loss_cell", loss_cell_value, on_step=False, on_epoch=True,
+                     logger=True, prog_bar=True)
         if self.foreground_head:
-            self.log(f"{prefix}_gen_foreground_loss", gen_foreground_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            self.log(f"{prefix}_gen_foreground_loss", gen_foreground_loss,
+                     on_step=False, on_epoch=True,
+                     prog_bar=True, logger=True)
         if self.perceptual_loss_fn:
-            self.log(f"{prefix}_loss_p", loss_p, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            self.log(f"{prefix}_loss_p", loss_p, on_step=False, on_epoch=True,
+                     prog_bar=True, logger=True)
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch: dict, batch_idx: int) -> None:
+        """Perform a validation step using the evaluation_step method."""
         self.evaluation_step(batch, batch_idx, "val")
 
-    def test_step(self, batch, batch_idx):
+    def test_step(self, batch: dict, batch_idx: int) -> None:
+        """Perform a test step using the evaluation_step method."""
         self.evaluation_step(batch, batch_idx, "test")
 
-    def epoch_end_cell_metrics(self, prefix, logreg_layer=None, return_dataframe=False):
+    def epoch_end_cell_metrics(self, prefix: str, logreg_layer: Optional[nn.Linear] = None,
+                               return_dataframe: bool = False):
+        """Log and optionally return cell-level classification metrics at the end of an epoch."""
         if return_dataframe:
             cell_metrics, dataframe_cell = self.cell_metrics.compute(logreg_layer, return_dataframe)
         else:
@@ -321,6 +407,7 @@ class ModelModule(pl.LightningModule):
             return cell_metrics
 
     def on_validation_epoch_end(self):
+        """Handle end-of-val-epoch logging, metric resetting, and optional cell metrics update."""
         self.log_dict(self.val_pix_metrics.compute())
         self.log_dict(self.val_disc_metrics.compute())
         self.val_pix_metrics.reset()
@@ -332,6 +419,7 @@ class ModelModule(pl.LightningModule):
         super().on_validation_epoch_end()
 
     def on_test_epoch_end(self):
+        """Handle end-of-test-epoch logging, metric resetting, and optional cell metrics update."""
         self.log_dict(self.test_pix_metrics.compute())
         self.log_dict(self.test_disc_metrics.compute())
         self.test_pix_metrics.reset()
@@ -341,11 +429,15 @@ class ModelModule(pl.LightningModule):
             _, dataframe_cell = self.epoch_end_cell_metrics(
                 "test", logreg_layer=self.logreg_layer, return_dataframe=True)
             if hasattr(self.trainer, "ckpt_path"):
-                dataframe_cell_path = str(Path(self.trainer.ckpt_path).parent / "test_dataframe_cell.csv")
+                dataframe_cell_path = str(
+                    Path(self.trainer.ckpt_path).parent / "test_dataframe_cell.csv")
                 dataframe_cell.to_csv(dataframe_cell_path, index=False)
         super().on_test_epoch_end()
 
     def configure_optimizers(self):
+        """Configure optimizers and learning rate schedulers of Lightning Module."""
+        """
+        # DEPRECATED
         if self.vit_lr_decay:
             decay_func = functools.partial(get_vit_lr_decay_rate,
                                            num_layers=len(self.generator.encoder.model.blocks),
@@ -360,6 +452,9 @@ class ModelModule(pl.LightningModule):
         else:
             g_optimizer = torch.optim.Adam(
                 self.generator.parameters(), lr=self.lr_g, betas=(0.5, 0.999), eps=1e-7)
+        """
+        g_optimizer = torch.optim.Adam(
+            self.generator.parameters(), lr=self.lr_g, betas=(0.5, 0.999), eps=1e-7)
         total_iters = self.trainer.estimated_stepping_batches
         g_scheduler = {
             'scheduler': torch.optim.lr_scheduler.LambdaLR(
@@ -386,35 +481,59 @@ class ModelModule(pl.LightningModule):
             d_scheduler = None
             return [g_optimizer], [g_scheduler]
 
-    def _log_train_metric(self, metric_name, metric_value):
+    def _log_train_metric(self, metric_name: str, metric_value):
+        """Log a training metric both per step and per epoch."""
         self.log(metric_name + "_step", metric_value, on_step=True, on_epoch=False,
                  prog_bar=True, logger=False)
         self.log(metric_name, metric_value, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True)
 
-    def _log_val_metric(self, metric_name, metric_value):
-        self.log(metric_name, metric_value, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+    def _log_val_metric(self, metric_name: str, metric_value):
+        """Log a validation/test metric both per step and per epoch."""
+        self.log(metric_name, metric_value, on_step=False, on_epoch=True,
+                 prog_bar=True, logger=True)
 
 
 class DiscriminatorPatch(nn.Module):
-    """Defines a PatchGAN discriminator
-    https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/models/networks.py
+    """
+    Define a PatchGAN discriminator for use in GAN architectures.
+
+    This class implements a PatchGAN discriminator as described in the CycleGAN and pix2pix papers.
+    It supports configurable normalization layers, dropout, and channel selection for the generated
+    images.
+    Args:
+        input_nc (int): Number of channels in the input images.
+        ndf (int, optional): Number of filters in the last convolutional layer. Defaults to 64.
+        n_layers (int, optional): Number of convolutional layers in the discriminator.
+            Defaults to 3.
+        dropout_rate (float, optional): Dropout rate for Dropout2d layers. Defaults to 0.
+        norm_layer_type (Optional[str], optional): Type of normalization layer to use ('batch',
+            'instance', or None). Defaults to None.
+        selected_channels (Optional[torch.Tensor], optional): Indices of channels to select from
+            the generated images if you want to apply the discriminator only on some markers.
+            Defaults to None.
+    Attributes:
+        selected_channels (Optional[torch.Tensor]): Indices of channels to select from the
+            generated images if you want to apply the discriminator only on some markers.
+        model (nn.Sequential): The sequential model representing the PatchGAN discriminator.
+    Methods:
+        forward(x, fake_images):
+            Performs a forward pass through the discriminator, optionally selecting specific
+                channels from the generated images and concatenating them with the input images.
+        _weights_init(m):
+            Initializes the weights of the model's layers.
+    References:
+        - https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/models/networks.py
     """
 
-    def __init__(self, input_nc, ndf=64, n_layers=3, dropout_rate=0., norm_layer_type=None, selected_channels=None):
-        """Construct a PatchGAN discriminator
-
-        Parameters:
-            input_nc (int)  -- the number of channels in input images
-            ndf (int)       -- the number of filters in the last conv layer
-            n_layers (int)  -- the number of conv layers in the discriminator
-            norm_layer      -- normalization layer
-        """
+    def __init__(self, input_nc: int, ndf: int = 64, n_layers: int = 3,
+                 dropout_rate: float = 0., norm_layer_type: Optional[str] = None,
+                 selected_channels: Optional[torch.Tensor] = None):
         super(DiscriminatorPatch, self).__init__()
         self.selected_channels = selected_channels
-        if norm_layer_type  == "batch":
+        if norm_layer_type == "batch":
             norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
-        elif norm_layer_type  == "instance":
+        elif norm_layer_type == "instance":
             norm_layer = functools.partial(nn.InstanceNorm2d, affine=True, track_running_stats=True)
         elif norm_layer_type is None:
             norm_layer = nn.Identity
@@ -432,7 +551,8 @@ class DiscriminatorPatch(nn.Module):
             nf_mult_prev = nf_mult
             nf_mult = min(2 ** n, 8)
             sequence += [
-                spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+                spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2,
+                                        padding=padw, bias=use_bias)),
                 norm_layer(ndf * nf_mult),
                 nn.LeakyReLU(0.2, inplace=False),
                 nn.Dropout2d(dropout_rate),
@@ -441,37 +561,37 @@ class DiscriminatorPatch(nn.Module):
         nf_mult_prev = nf_mult
         nf_mult = min(2 ** n_layers, 8)
         sequence += [
-            spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
+            spectral_norm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1,
+                                    padding=padw, bias=use_bias)),
             norm_layer(ndf * nf_mult),
             nn.LeakyReLU(0.2, inplace=False),
             nn.Dropout2d(dropout_rate),
         ]
 
-        sequence += [spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw))]
+        sequence += [spectral_norm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw,
+                                             stride=1, padding=padw))]
         self.model = nn.Sequential(*sequence)
         self.model.apply(self._weights_init)
 
-    def _weights_init(self, m):
-        """
-        Initialize weights of the model.
-        """
+    def _weights_init(self, m: nn.Module) -> None:
+        """Initialize weights of the model."""
         if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
             nn.init.normal_(m.weight, 0.0, 0.02)
-            #nn.init.xavier_normal_(m.weight.data, gain=0.02)
+            # nn.init.xavier_normal_(m.weight.data, gain=0.02)
             if hasattr(m, 'bias') and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, (nn.BatchNorm2d, nn.InstanceNorm2d)):
             nn.init.normal_(m.weight, 1.0, 0.02)
             nn.init.constant_(m.bias, 0)
 
-    def forward(self, x, fake_images):
+    def forward(self, x: torch.Tensor, fake_images: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with channel selection on generated image.
-        
+
         Parameters:
             x (tensor)          -- RGB input image
             fake_images (tensor)-- Generated image
-        
+
         Returns:
             Tensor              -- Discriminator output
         """
@@ -481,5 +601,5 @@ class DiscriminatorPatch(nn.Module):
 
         # Concatenate RGB input and selected generated channels
         input = torch.cat([x, fake_images], dim=1)
-        
+
         return self.model(input)

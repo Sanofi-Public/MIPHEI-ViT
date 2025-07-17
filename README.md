@@ -1,6 +1,23 @@
 # **MIPHEI-vit: Multiplex Immunofluorescence Prediction from H&E Images using ViT Foundation Models**
 
-<img src="MIPHEI_logo.svg" width="250px" align="right" />
+<p align="center">
+  <img src="MIPHEI_logo.svg" alt="MIPHEI-ViT Logo" style="height:250px;">
+</p>
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2505.10294" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+    <img src="https://img.shields.io/badge/arXiv-Paper-red?logo=arxiv" height="25">
+  </a>
+  <a href="https://github.com/Sanofi-Public/MIPHEI-ViT" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+    <img src="https://img.shields.io/badge/GitHub-Code-black?logo=github" height="25">
+  </a>
+  <a href="https://huggingface.co/spaces/Estabousi/MIPHEI-vit-demo" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+    <img src="https://img.shields.io/badge/Gradio-Demo-yellow?logo=gradio" height="25">
+  </a>
+  <a href="https://zenodo.org/records/15340874" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+    <img src="https://img.shields.io/badge/Zenodo-Dataset-blue?logo=zenodo" height="25">
+  </a>
+</p>
 
 This repository supports full **reproducibility** of our paper on predicting **multiplex immunofluorescence (mIF)** from standard **H&E-stained histology images**.  
 It includes all **code**, **pretrained models**, and **preprocessing steps** to replicate our results or apply the approach to new datasets.
@@ -14,6 +31,23 @@ We cover key markers from the **ORION dataset**, including:
 **Hoechst**, **CD31**, **CD45**, **CD68**, **CD4**, **FOXP3**, **CD8a**, **CD45RO**, **CD20**, **PD-L1**, **CD3e**, **CD163**, **E-cadherin**, **Ki67**, **Pan-CK**, **SMA**.  
 📊 Performance for each marker is detailed in the paper.
 
+Run MIPHEI-ViT on H&E tiles & reproduce the results: [<img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="25">](https://colab.research.google.com/github/Sanofi-Public/MIPHEI-ViT/blob/main/notebooks/colab_inference.ipynb)
+
+---
+
+## 🛠️ Project Status
+Last updated: July 2025
+
+- ✅ Code cleanup (PEP8 compliance)
+- ✅ Bootstrap analysis integrated in evaluation folder
+- ✅ Correction of H&E normalization for MIPHEI checkpoint
+- ✅ SlideVips updated and optimized (RAM issue fixed)
+- ✅ WSI inference pipeline implemented
+- ✅ Google Colab Notebook Update
+
+**Planned / To Do:**
+- [ ] Refactor preprocessing pipeline for PEP8 compliance  
+ 
 ---
 
 ## 📦 Installation
@@ -86,6 +120,12 @@ Also update the paths inside the dataframes, if needed.
   </li>
 </ul>
 
+To automatically download all model checkpoints into the `checkpoints/` folder, run in the `evaluation/` folder:
+
+```bash
+python download_checkpoints.py
+```
+
 Each model is organized in a folder containing:
 
 - the model checkpoint (`.ckpt` or `.safetensors`)
@@ -96,9 +136,23 @@ Each model is organized in a folder containing:
 
 ## 🔍 Inference
 
-You can use the pretrained models to run inference on **ORION**, **HEMIT**, or your **own custom H&E images**. 
+You can use the pretrained models to run inference on **ORION**, **HEMIT**, or your **own custom H&E images**.
 
-### On ORION/HEMIT data:
+### On Whole Slide Images (WSI)
+To run inference directly on a full-resolution WSI (e.g., .svs, .tiff, .ndpi), use:
+
+```bash
+python run_wsi_inference.py \
+  --slide_path path/to/slide.wsi \
+  --checkpoint_dir path/to/miphei_checkpoint \
+  --output_dir path/to/save_predictions
+```
+
+Additional parameters are available to control tile size, overlap, batch size, and inference magnification.
+
+See run_wsi_inference.py --help for the full list of options.
+
+### On Tiles from ORION/HEMIT data:
 
 To visualize predictions on ORION or HEMIT datasets, use the following notebook:
 
@@ -122,7 +176,6 @@ This will generate a new folder inside`checkpoint_dir` containing **predicted TI
 If you want to try the model on your own H&E images:
 
 - Use the notebook: `notebooks/inference.ipynb`
-- Or [<img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="25">](https://colab.research.google.com/github/Sanofi-Public/MIPHEI-ViT/blob/main/notebooks/colab_inference.ipynb)
 
 ---
 
@@ -198,7 +251,7 @@ python run.py -m +experiments/foundation_models='glob(*)'
 
 ---
 
-### 🧰 SlideVips
+## 🧰 SlideVips
 
 Alongside this code, we developed a high-performance `pyvips`-based tile reader and processing engine for **efficient WSI operations**, supporting both H&E and high-dimensional mIF images. This provides an alternative to tools like OpenSlide, with full support for multi-channel fluorescence.
 
@@ -216,5 +269,5 @@ To reproduce the preprocessing steps for the **ORION** dataset or to apply them 
 
 If you use this work, please cite:
 
-> G. Balezo, R. Trullo, A. Pla Planas, E. Decenciere, and T. Walter, “MIPHEI-vit: Multiplex Immunofluorescence Prediction from H&E Images using ViT Foundation Models,” arXiv preprint arXiv:…, 2025.
+> Balezo, G., Trullo, R., Planas, A., Decenciere, E., & Walter, T. (2025). MIPHEI-ViT: Multiplex Immunofluorescence Prediction from H&E Images using ViT Foundation Models. arXiv preprint arXiv:2505.10294.
 >

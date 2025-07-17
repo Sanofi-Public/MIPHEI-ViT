@@ -55,6 +55,8 @@ slide_if.write_regions(folder, tile_positions, level, (tile_size_x, tile_size_y)
 ```
 
 #### 5. Creating PyTorch Datasets
+⚠️ Warning: When using multiprocessing with SlideVips Torch datasets (and pyvips), the default Python memory allocator (malloc) may lead to memory leaks.
+To avoid this issue, we recommend using jemalloc, a more memory-efficient allocator. You can enable it by running your script with: `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 python your_script.py`
 ```python
 from slidevips.torch_datasets import SlideDataset
 import pandas as pd
@@ -97,4 +99,8 @@ To install SlideVips, follow these steps:
 2. Install the SlideVips package:
    ```bash
    pip install -e .  # Run this inside the package folder
+   ```
+3. (Optional) Install jemalloc to avoid memory issues when using SlideVips with multiprocessing in PyTorch:
+   ```bash
+   sudo apt-get install libjemalloc2
    ```

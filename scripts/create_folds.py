@@ -1,18 +1,21 @@
-import pandas as pd
-from pathlib import Path
-import numpy as np
-import argparse
+"""Script for creating k-fold cross-validation splits from training and validation dataframes."""
 
-def extract_folds(dataframe, k):
+import argparse
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+def extract_folds(dataframe: pd.DataFrame, k: int) -> list:
     """
-    Splits a 1D NumPy array into k roughly equal parts.
-    
+    Split a pandas DataFrame into k roughly equal folds.
+
     Args:
-        arr (np.ndarray): 1D array to be split.
-        k (int): Number of parts to split the array into.
-    
+        dataframe (pd.DataFrame): DataFrame to be split into folds.
+        k (int): Number of folds.
     Returns:
-        list: A list of k NumPy arrays as the parts of the original array.
+        list: List of k DataFrames, each representing a fold.
     """
     length = len(dataframe)
     arr = np.arange(length)
@@ -63,5 +66,6 @@ if __name__ == "__main__":
     val_dataframe_sample = pd.concat(val_dataframe_sample)
 
     for idx_fold, train_fold in enumerate(train_folds):
-        train_fold.to_csv(str(Path(args.root_folder) / f"train_dataframe_fold_{idx_fold}.csv"), index=False)
+        train_fold.to_csv(str(Path(args.root_folder) / f"train_dataframe_fold_{idx_fold}.csv"),
+                          index=False)
     val_dataframe_sample.to_csv(str(Path(args.root_folder) / "val_dataframe_fold.csv"), index=False)

@@ -53,7 +53,7 @@ def load_model(model_path, device):
     Returns:
     torch.nn.Module: Loaded model ready for inference.
     """
-    checkpoint = torch.load(model_path, map_location=lambda storage, loc: storage)
+    checkpoint = torch.load(model_path, weights_only=False, map_location=lambda storage, loc: storage)
     model = HoverFast(n_classes=checkpoint["n_classes"], in_channels=checkpoint["in_channels"],
                       padding=checkpoint["padding"], depth=checkpoint["depth"], wf=checkpoint["wf"],
                       up_mode=checkpoint["up_mode"], batch_norm=checkpoint["batch_norm"], conv_block=checkpoint["conv_block"]).to(device, memory_format=torch.channels_last)

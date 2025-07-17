@@ -6,7 +6,7 @@ omegaconf==2.3.0
 opencv_python==4.11.0.86
 opencv_python_headless==4.11.0.86
 pandas==2.2.3
-Pillow==11.2.1
+Pillow==11.3.0
 pytorch_lightning==2.5.0.post0
 torchmetrics==1.6.2
 safetensors==0.5.3

@@ -1,93 +1,56 @@
-"""
-Test scripts for image to image segmentation.
-"""
+"""Inference of mIF from H&E patches. Predicted TIFF files will be saved in output_dir."""
+
 import logging
-logging.getLogger('pyvips').setLevel(logging.WARNING)
-
 import os
-os.environ['VIPS_CONCURRENCY'] = '1'
-import pyvips
 
-from omegaconf import OmegaConf
-import albumentations as A
 import json
 from pathlib import Path
+from omegaconf import DictConfig
+
+import albumentations as A
 import pandas as pd
+from omegaconf import OmegaConf
 from pytorch_lightning import Trainer
 import torch
-from slidevips.torch_datasets import SlideDataset
-from timm.layers import resample_abs_pos_embed
 
-from .dataset import NormalizationLayer, get_effective_width_height, TileSlideDataset, get_width_height
-from .models import ModelModule, DiscriminatorPatch
+import pyvips  # Avoid pyvips import error from src.dataset
+
+from .dataset import (
+    NormalizationLayer,
+    get_effective_width_height,
+    TileSlideDataset,
+    get_width_height,
+)
+from .models import ModelModule
+from .generators.hemit_models import resize_embed_hemit_statedict
 from .callbacks import SavePredictionsCallback
 from .generators import get_generator
-from timm.layers import resample_patch_embed, resize_rel_pos_bias_table
+from .utils import validate_load_info, get_generator_state_dict
 
 
-def validate_load_info(load_info):
+def inference_model(cfg: DictConfig, checkpoint_dir: str, output_dir: str) -> None:
     """
-    Validates the result of model.load_state_dict(..., strict=False).
+    Run inference from a trained model using the provided configuration and checkpoints.
 
+    This function loads a model checkpoint, prepares the test dataset, applies necessary
+    preprocessing and augmentations, and performs inference to generate predictions,
+    which are saved as multi channel TIFF files to the specified output directory.
+
+    Args:
+        cfg (oDictConfig): Configuration associated with the trained model containing data
+            paths, model hyperparameters, and training/inference settings.
+        checkpoint_dir (str or Path): Directory containing the model checkpoint files
+            (either .safetensors or .ckpt).
+        output_dir (str or Path): Directory where the inference predictions will be saved.
+    Returns:
+        None
     Raises:
-        ValueError if unexpected keys are found,
-        or if missing keys are not related to the allowed encoder modules.
+        FileNotFoundError: If required files such as the test dataframe or checkpoint are missing.
+        RuntimeError: If there is an error during model loading or inference.
     """
-    # 1. Raise if any unexpected keys
-    if load_info.unexpected_keys:
-        raise ValueError(f"Unexpected keys in state_dict: {load_info.unexpected_keys}")
-
-    # 2. Raise if any missing keys are not part of allowed encoder modules
-    for key in load_info.missing_keys:
-        if ".lora" in key:
-            raise ValueError(f"Missing LoRA checkpoint in state_dict: {key}")
-        elif not any(part in key for part in ["encoder.vit.", "encoder.model."]):
-            raise ValueError(f"Missing key in state_dict: {key}")
-
-
-def resize_embed_hemit_statedict(state_dict, model):
-    
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if any([n in k for n in ('relative_position_index', 'attn_mask')]):
-                continue
-
-        if 'swinT.patch_embed.proj.weight' in k:
-            _, _, H, W = model.swinT.patch_embed.proj.weight.shape
-            if v.shape[-2] != H or v.shape[-1] != W:
-                v = resample_patch_embed(
-                    v,
-                    (H, W),
-                    interpolation='bicubic',
-                    antialias=True,
-                    verbose=True,
-                )
-
-        if k.endswith('relative_position_bias_table'):
-            m = model.get_submodule(k[:-29])
-            if v.shape != m.relative_position_bias_table.shape or m.window_size[0] != m.window_size[1]:
-                v = resize_rel_pos_bias_table(
-                    v,
-                    new_window_size=m.window_size,
-                    new_bias_shape=m.relative_position_bias_table.shape,
-                )
-        new_state_dict[k] = v
-
-    return new_state_dict
-
-
-def get_generator_state_dict(state_dict):
-    generator_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("generator."):
-            generator_state_dict[k.replace("generator.", "")] = v
-    return generator_state_dict
-
-
-def inference_model(cfg, checkpoint_dir, output_dir):
+    logging.getLogger('pyvips').setLevel(logging.WARNING)  # Suppress pyvips useless warnings
     log = logging.getLogger(__name__)
     log.info(OmegaConf.to_yaml(cfg))
-    pyvips.cache_set_max(0)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log.info("device: {}".format(device))
 
@@ -117,15 +80,16 @@ def inference_model(cfg, checkpoint_dir, output_dir):
     preprocess_input_fn = NormalizationLayer(channel_stats["RGB"], mode="he")
 
     if from_slide:
+        from slidevips.torch_datasets import SlideDataset
         dataset = SlideDataset(slide_dataframe=slide_dataframe, dataframe=test_dataframe)
     else:
         dataset = TileSlideDataset(
-            dataframe=test_dataframe,preprocess_input_fn=preprocess_input_fn,
+            dataframe=test_dataframe, preprocess_input_fn=preprocess_input_fn,
             spatial_augmentations=spatial_augmentations)
 
     num_workers = os.cpu_count() - 1
     dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=cfg.train.batch_size, pin_memory=device!="cpu",
+        dataset, batch_size=cfg.train.batch_size, pin_memory=device != "cpu",
         shuffle=False, drop_last=False, num_workers=num_workers
     )
 
@@ -147,7 +111,7 @@ def inference_model(cfg, checkpoint_dir, output_dir):
         print("Loading checkpoint from ckpt")
     if hasattr(generator, "swinT"):
         state_dict = resize_embed_hemit_statedict(state_dict, generator)
-    
+
     load_info = generator.load_state_dict(state_dict, strict=strict_load)
     if use_safetensors:
         validate_load_info(load_info)
@@ -155,13 +119,12 @@ def inference_model(cfg, checkpoint_dir, output_dir):
     if os.name == 'nt':
         jit_compile = False
     else:
-        #generator = torch.compile(generator)
-        #jit_compile = True
+        # generator = torch.compile(generator)
+        # jit_compile = True
         jit_compile = False
 
-
     discriminator = None
-    #foreground_loss = CombinedBCEAndDiceLoss(1.)
+    # foreground_loss = CombinedBCEAndDiceLoss(1.)
     pl_model = ModelModule(
         generator=generator, discriminator=discriminator,
         lr_g=0.,
@@ -170,7 +133,6 @@ def inference_model(cfg, checkpoint_dir, output_dir):
         cell_loss=None,
         loss_reconstruct=None,
         gan_train=False)
-
 
     callbacks = [
         SavePredictionsCallback(output_dir)
@@ -182,5 +144,5 @@ def inference_model(cfg, checkpoint_dir, output_dir):
 
     trainer = Trainer(callbacks=callbacks, inference_mode=True,
                       accelerator="gpu", precision=cfg.train.precision, devices=1,
-    )
+                      )
     trainer.predict(pl_model, dataloader)

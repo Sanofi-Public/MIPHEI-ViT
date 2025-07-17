@@ -1,1 +1,1 @@
-from slidevips.reader import SlideVips, RegionSlideVips
+from slidevips.reader import SlideVips  #, RegionSlideVips

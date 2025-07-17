@@ -1,8 +1,18 @@
+"""
+Implementation of HEMIT architecture with Dual-Branch Generator proposed in \
+HEMIT: H&E to Multiplex-immunohistochemistry Image Translation with Dual-Branch \
+Pix2pix Generator.
+
+Paper: https://arxiv.org/abs/2403.18501
+Code from https://github.com/BianChang/Pix2pix_DualBranch/blob/main/models/networks.py
+"""
+
 import torch
 import torch.nn as nn
 from torch.nn import init
 import functools
 import timm
+from timm.layers import resample_patch_embed, resize_rel_pos_bias_table
 import math
 from torch import einsum
 from einops import rearrange
@@ -13,8 +23,61 @@ from einops import rearrange
 ###############################################################################
 
 
+def resize_embed_hemit_statedict(state_dict, model):
+    """
+    Adjust and resize specific parameters in a state_dict for the HEMIT model using \
+    Swin Transformer encoder to match the inference width and height.
+
+    This function is specifically designed for the HEMIT model, which uses a Swin Transformer
+    backbone. When the inference patch size (width/height) differs from the training size,
+    the patch embedding weights and relative position bias tables must be resized to match the new
+    spatial dimensions. This function skips keys related to 'relative_position_index' and
+    'attn_mask' (not learned parameters), resamples the patch embedding weights if their shape does
+    not match the model's expected shape, and resizes the relative position bias tables if their
+    shapes or window sizes differ from those in the model.
+
+    Args:
+        state_dict (dict): The state dictionary containing model parameters to be adapted.
+        model (torch.nn.Module): The HEMIT model whose parameter shapes are used for resizing.
+    Returns:
+        dict: A new state dictionary with resized and adjusted parameters, suitable for loading
+            into the HEMIT model for inference with the desired width and height.
+    """
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if any(n in k for n in ('relative_position_index', 'attn_mask')):
+            continue
+
+        if 'swinT.patch_embed.proj.weight' in k:
+            _, _, H, W = model.swinT.patch_embed.proj.weight.shape
+            if v.shape[-2] != H or v.shape[-1] != W:
+                v = resample_patch_embed(
+                    v,
+                    (H, W),
+                    interpolation='bicubic',
+                    antialias=True,
+                    verbose=True,
+                )
+
+        if k.endswith('relative_position_bias_table'):
+            m = model.get_submodule(k[:-29])
+            if (
+                v.shape != m.relative_position_bias_table.shape
+                or m.window_size[0] != m.window_size[1]
+            ):
+                v = resize_rel_pos_bias_table(
+                    v,
+                    new_window_size=m.window_size,
+                    new_bias_shape=m.relative_position_bias_table.shape,
+                )
+        new_state_dict[k] = v
+
+    return new_state_dict
+
+
 def get_generator_hemit(input_nc, output_nc, image_size, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
-    """Create a generator
+    """
+    Create HEMIT generator.
 
     Parameters:
         input_nc (int) -- the number of channels in input images

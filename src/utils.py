@@ -1,28 +1,63 @@
-"""
-Utility functions for the project.
-"""
+"""Utility function implementations."""
 
-from typing import Tuple
+from typing import Callable, List, Tuple
 
 import numpy as np
-import pytorch_lightning as pl
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+import pytorch_lightning as pl
 from hydra.core.hydra_config import HydraConfig
 from wandb import Artifact
 
 
 class MeanCellExtrator(nn.Module):
-    def __init__(self, scale_factor=1.):
+    """
+    MeanCellExtrator extracts mean cell-level intensities from prediction and target tensors using \
+    precomputed nuclei instance segmentation masks.
+
+    This is useful for computing cell-level losses, such as MSE loss between mean expressions of
+    predicted and target images at the instance (cell) level. More information in `CellMetrics`.
+    Args:
+        scale_factor (float): Factor to downsample the input tensors before mean extraction.
+            Must be in the range (0, 1]. Default is 1.0 (no downsampling).
+    Attributes:
+        scale_factor (float): Factor to downsample the input tensors before mean extraction.
+    Methods:
+        forward(pred, target, nuclei):
+            Extracts mean intensities for each cell instance from both prediction and target
+                tensors, using the provided nuclei segmentation.
+            Optionally downsamples the inputs according to `scale_factor`.
+                target (torch.Tensor): Target tensor of shape [B, C, H, W].
+                    If None, a zero tensor is used (no target).
+                nuclei (torch.Tensor): Nuclei label tensor of shape [B, 1, H, W], where each unique
+                    value corresponds to a cell instance.
+                Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                    - pred_means: Mean intensities for prediction, shape [num_labels, C].
+                    - target_means: Mean intensities for target, shape [num_labels, C].
+                    - cell_ids: Unique cell IDs for each region, shape [num_labels].
+        extract_mean(pred, target, nuclei):
+            Computes mean intensities for each cell instance in both prediction and target tensors,
+                using the nuclei segmentation.
+                Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+                    - pred_means: Mean intensities for prediction, shape [num_labels, C].
+                    - target_means: Mean intensities for target, shape [num_labels, C].
+                    - cell_ids: Unique cell IDs for each region, shape [num_labels].
+    """
+
+    def __init__(self, scale_factor: float = 1.):
         super(MeanCellExtrator, self).__init__()
         if not (0. < scale_factor <= 1):
             raise ValueError("scale_factor should be between 0 and 1")
         self.scale_factor = scale_factor
 
-    def forward(self, pred, target, nuclei):
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, nuclei: torch.Tensor
+                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Compute L1 loss between mean intensities extracted from prediction and target for regions defined by nuclei.
+        Compute L1 loss between mean intensities extracted from prediction and target for regions \
+        defined by nuclei.
 
         Args:
             pred (torch.Tensor): Predicted tensor of shape [B, C, H, W].
@@ -33,20 +68,22 @@ class MeanCellExtrator(nn.Module):
             torch.Tensor: L1 loss between extracted mean intensities.
         """
         # Downsample pred, target, and nuclei
-        if target==None:
+        if target is None:
             target = torch.zeros_like(pred)
         if nuclei.ndim == 3:
             nuclei = torch.unsqueeze(nuclei, dim=1).long()
         if self.scale_factor < 1.:
             pred = F.interpolate(pred, scale_factor=self.scale_factor, mode='area')
             target = F.interpolate(target, scale_factor=self.scale_factor, mode='area')
-            nuclei = F.interpolate(nuclei.float(), scale_factor=self.scale_factor, mode='nearest-exact').long()
+            nuclei = F.interpolate(nuclei.float(), scale_factor=self.scale_factor,
+                                   mode='nearest-exact').long()
 
         # Extract mean intensities for both pred and target
         pred_means, target_means, cell_ids = self.extract_mean(pred, target, nuclei)
         return pred_means, target_means, cell_ids
 
-    def extract_mean(self, pred, target, nuclei):
+    def extract_mean(self, pred: torch.Tensor, target: torch.Tensor, nuclei: torch.Tensor
+                     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Extract mean intensities for prediction and target using shared nuclei computations.
 
@@ -79,8 +116,10 @@ class MeanCellExtrator(nn.Module):
             # Apply the binary mask to nuclei
             nuclei_flat = nuclei_b[nuclei_binary]  # Shape: [num_valid_pixels]
             if nuclei_flat.numel() == 0:  # No valid regions
-                all_pred_means.append(torch.zeros((0, num_channels), dtype=pred.dtype, device=pred.device))
-                all_target_means.append(torch.zeros((0, num_channels), dtype=target.dtype, device=target.device))
+                all_pred_means.append(torch.zeros((0, num_channels), dtype=pred.dtype,
+                                                  device=pred.device))
+                all_target_means.append(torch.zeros((0, num_channels), dtype=target.dtype,
+                                                    device=target.device))
                 all_cell_ids.append(torch.empty(0, dtype=nuclei_b.dtype, device=nuclei_b.device))
                 continue
 
@@ -92,17 +131,23 @@ class MeanCellExtrator(nn.Module):
             target_flat = target_b.permute(1, 2, 0)[nuclei_binary]  # Shape: [num_valid_pixels, C]
 
             # Compute sums per region and channel for pred and target
-            pred_sums = torch.zeros((unique_labels.shape[0], num_channels), dtype=pred.dtype, device=pred.device).scatter_add_(
-                0, inverse_indices.unsqueeze(1).expand(-1, num_channels), pred_flat
-            )
-            target_sums = torch.zeros((unique_labels.shape[0], num_channels), dtype=target.dtype, device=target.device).scatter_add_(
-                0, inverse_indices.unsqueeze(1).expand(-1, num_channels), target_flat
-            )
+            pred_sums = torch.zeros(
+                (unique_labels.shape[0], num_channels), dtype=pred.dtype,
+                device=pred.device).scatter_add_(
+                    0, inverse_indices.unsqueeze(1).expand(-1, num_channels), pred_flat
+                    )
+            target_sums = torch.zeros(
+                (unique_labels.shape[0], num_channels), dtype=target.dtype,
+                device=target.device).scatter_add_(
+                    0, inverse_indices.unsqueeze(1).expand(-1, num_channels), target_flat
+                    )
 
             # Compute counts per region
-            region_counts = torch.zeros(unique_labels.shape[0], dtype=torch.float32, device=nuclei.device).scatter_add_(
-                0, inverse_indices, torch.ones_like(nuclei_flat, dtype=torch.float32)
-            )
+            region_counts = torch.zeros(
+                unique_labels.shape[0], dtype=torch.float32,
+                device=nuclei.device).scatter_add_(
+                    0, inverse_indices, torch.ones_like(nuclei_flat, dtype=torch.float32)
+                    )
 
             # Compute mean intensities
             pred_means = pred_sums / region_counts.unsqueeze(1)
@@ -165,26 +210,19 @@ def load_normalization_stats(stats_in_path: str, stats_out_path: str
     return mean_image, std_image, min_target, max_target
 
 
-def get_dim_images(val_dataset) -> Tuple[int, int]:
+def wandb_log_artifact(logger, artifact_name: str, artifact_type: str, file_path: str):
     """
-    Get the number of input and output channels using the validation dataset.
-        These values are useful for the augmentations.
+    Log a file as an artifact to Weights & Biases (wandb) using the provided logger.
 
     Args:
-        val_dataset: The validation dataset.
-
-    Returns:
-        A tuple containing the number of input channels and the number of output channels.
+        logger: The wandb logger object, which should have an `experiment` attribute representing
+            the current run.
+        artifact_name (str): The base name for the artifact to be logged.
+        artifact_type (str): The type/category of the artifact (e.g., 'model', 'dataset').
+        file_path (str): The path to the file to be added and logged as an artifact.
+    Raises:
+        AssertionError: If the logger's experiment (run) is None.
     """
-    val_batch = val_dataset[0]
-    nc_in, width, height = val_batch[0].shape
-    nc_out, width_out, height_out = val_batch[1].shape
-    assert width == width_out and height == height_out
-    val_dataset.reset()
-    return nc_in, nc_out, width, height
-
-
-def wandb_log_artifact(logger, artifact_name: str, artifact_type: str, file_path: str):
     run = logger.experiment
     assert run is not None
     artifact_name = f"run_{run.id}_{artifact_name}"
@@ -193,28 +231,58 @@ def wandb_log_artifact(logger, artifact_name: str, artifact_type: str, file_path
     logger.experiment.log_artifact(artifact)
 
 
-def update_wandb_note(wandb_note):
+def update_wandb_note(wandb_note: str) -> str:
+    """
+    Append the Hydra job name to the provided Weights & Biases note.
+
+    Args:
+        wandb_note (str): The initial note string for Weights & Biases.
+
+    Returns:
+        str: The updated note string with the Hydra job name appended.
+    """
     hydra_name = HydraConfig.get().job['override_dirname']
     wandb_note = wandb_note + " /" + hydra_name
     return wandb_note
 
 
-def get_foreground_weight(channel_names, train_dataframe):
+def get_foreground_weight(channel_names: List[str], train_dataframe: pd.DataFrame) -> np.ndarray:
+    """Calculate and return the foreground weight for each channel based on their proportions in \
+    the training dataframe.
+
+    Can be used with get_focal_loss, but not recommended.
+    Args:
+        channel_names (list): List of channel names to calculate foreground weights for.
+        train_dataframe (pd.DataFrame): DataFrame containing training data with channel proportions.
+    """
     columns = [f"{channel_name}_prop" for channel_name in channel_names]
     foreground_prop = train_dataframe[columns].mean(axis=0).values
     foreground_weight = 1 - foreground_prop
-    return np.maximum(foreground_weight / (1 - foreground_weight), 1.) #########
-    #return foreground_weight ########
+    return np.maximum(foreground_weight / (1 - foreground_weight), 1.)
+    # return foreground_weight
 
 
-def get_foreground_thresh(stats_list_if, preprocess_target_fn):
-    stats_list_if = stats_list_if.copy()
-    min_ = np.array([stats["min"] for stats in stats_list_if])
-    tresh = preprocess_target_fn(min_).reshape((1, 1, 1, -1))
-    return torch.from_numpy(tresh).float()
+def pix2pix_lr_scheduler(total_iters: int, warmup_iters: int, decay_start_iter: int) -> Callable:
+    """
+    Create a learning rate scheduler function for the pix2pix training regime.
 
+    The scheduler consists of three phases:
+      1. Warmup Phase: Linearly increases the learning rate from 0 to the initial learning rate
+        over `warmup_iters` steps.
+      2. Constant Phase: Keeps the learning rate constant at the initial value from `warmup_iters`
+        to `decay_start_iter`.
+      3. Decay Phase: Linearly decays the learning rate from the initial value to 0 from
+        `decay_start_iter` to `total_iters`.
 
-def pix2pix_lr_scheduler(total_iters, warmup_iters, decay_start_iter):
+    Args:
+        total_iters (int): Total number of training iterations.
+        warmup_iters (int): Number of iterations for the warmup phase.
+        decay_start_iter (int): Iteration at which to start decaying the learning rate.
+
+    Returns:
+        Callable[[int], float]: A function that takes the current step (int) and returns the
+            learning rate multiplier (float).
+    """
     def lr_lambda(step):
         if step < warmup_iters:
             # Warmup Phase: linearly increase from 0 to initial_lr
@@ -230,70 +298,14 @@ def pix2pix_lr_scheduler(total_iters, warmup_iters, decay_start_iter):
     return lr_lambda
 
 
-class LayerDecayOptimizerConstructor:
-    def __init__(self, base_lr, base_wd, paramwise_cfg=None):
-        self.base_lr = base_lr
-        self.base_wd = base_wd
-        self.paramwise_cfg = paramwise_cfg if paramwise_cfg is not None else {}
-
-    @staticmethod
-    def get_num_layer_for_vit(self, var_name, num_max_layer):
-        # Function remains the same, it's logic-based and framework-independent
-        if var_name in ('encoder.vit_adapter.cls_token', 'encoder.vit_adapter.mask_token',
-                        'encoder.vit_adapter.pos_embed', 'encoder.vit_adapter.visual_embed'):
-            return 0
-        elif var_name.startswith('encoder.vit_adapter.patch_embed') or \
-            var_name.startswith('encoder.vit_adapter.visual_embed'):
-            return 0
-        elif var_name.startswith('encoder.vit_adapter.blocks') or \
-            var_name.startswith('encoder.vit_adapter.layers'):
-            layer_id = int(var_name.split('.')[3])
-            return layer_id + 1
-        else:
-            return num_max_layer - 1
-
-    def construct(self, model):
-        params = []
-        num_layers = self.paramwise_cfg.get('num_layers') + 2
-        layer_decay_rate = self.paramwise_cfg.get('layer_decay_rate')
-        weight_decay = self.base_wd
-
-        parameter_groups = {}
-        for name, param in model.named_parameters():
-            if not param.requires_grad:
-                continue  # Skip frozen weights
-            if len(param.shape) == 1 or name.endswith('.bias') or name in ('pos_embed', 'cls_token', 'visual_embed'):
-                group_name = 'no_decay'
-                this_weight_decay = 0.
-            else:
-                group_name = 'decay'
-                this_weight_decay = weight_decay
-
-            layer_id = self.get_num_layer_for_vit(name, num_layers)
-            group_name = f'layer_{layer_id}_{group_name}'
-            if group_name not in parameter_groups:
-                scale = layer_decay_rate ** (num_layers - layer_id - 1)
-                parameter_groups[group_name] = {
-                    'weight_decay': this_weight_decay,
-                    'params': [],
-                    'lr_scale': scale,
-                    'group_name': group_name,
-                    'lr': scale * self.base_lr,
-                }
-            parameter_groups[group_name]['params'].append(param)
-
-        params.extend(parameter_groups.values())
-        return params
-
-
-def get_vit_lr_decay_rate(name, lr_decay_rate=1.0, num_layers=12):
+def get_vit_lr_decay_rate(name: str, lr_decay_rate: float = 1.0, num_layers: int = 12) -> float:
     """
     Calculate lr decay rate for different ViT blocks.
+
     Args:
         name (string): parameter name.
         lr_decay_rate (float): base lr decay rate.
         num_layers (int): number of ViT blocks.
-
     Returns:
         lr decay rate for the given parameter.
     """
@@ -302,5 +314,50 @@ def get_vit_lr_decay_rate(name, lr_decay_rate=1.0, num_layers=12):
         if ".pos_embed" in name or ".patch_embed" in name:
             layer_id = 0
         elif ".blocks." in name and ".residual." not in name:
-            layer_id = int(name[name.find(".blocks.") :].split(".")[2]) + 1
+            layer_id = int(name[name.find(".blocks."):].split(".")[2]) + 1
     return lr_decay_rate ** (num_layers + 1 - layer_id)
+
+
+def validate_load_info(load_info):
+    """
+    Validate the result of model.load_state_dict(..., strict=False).
+
+    Args:
+        load_info : The result of the load_state_dict call.
+    Raises:
+        ValueError if unexpected keys are found,
+        or if missing keys are not related to the allowed encoder modules.
+    """
+    # 1. Raise if any unexpected keys
+    if load_info.unexpected_keys:
+        raise ValueError(f"Unexpected keys in state_dict: {load_info.unexpected_keys}")
+
+    # 2. Raise if any missing keys are not part of allowed encoder modules
+    for key in load_info.missing_keys:
+        if ".lora" in key:
+            raise ValueError(f"Missing LoRA checkpoint in state_dict: {key}")
+        elif not any(part in key for part in ["encoder.vit.", "encoder.model."]):
+            raise ValueError(f"Missing key in state_dict: {key}")
+
+
+def get_generator_state_dict(state_dict) -> dict:
+    """
+    Extract and return the generator-specific parameters from a model's state dictionary.
+
+    This function filters out all key-value pairs in the input `state_dict` whose keys start with
+    "generator.", removes the "generator." prefix from these keys, and returns a new dictionary
+    containing only these filtered parameters.
+
+    Args:
+        state_dict (dict): The state dictionary of a trained ModelModule.
+
+    Returns:
+        dict: The state dictionary of only the generator.
+    """
+    generator_state_dict = {}
+    for k, v in state_dict.items():
+        new_k = k.replace("_orig_mod.", "") if "_orig_mod." in k else k
+        if k.startswith("generator."):
+            new_k = new_k.replace("generator.", "")
+            generator_state_dict[new_k] = v
+    return generator_state_dict

@@ -1,16 +1,26 @@
-import concurrent
-import concurrent.futures
-import cv2
-import numpy as np
-import os
-from pathlib import Path
-from numpy import ndarray
-import pyvips
-from slidevips.read_pyramid import get_pyramid_pyvips
-import torch
-from typing import List, Tuple, Optional
+"""
+WSI reader and region processing utilities using pyvips.
+
+This module provides classes and utility functions for reading, processing, and writing regions
+from whole slide images (WSI) using the pyvips library. It offers a high-level interface for
+handling multi-resolution pyramid images, supporting both standard RGB and multi-channel
+immunofluorescence (mIF) slides. The main class, `SlideVips`, mimics the OpenSlide API but extends
+it to support multi-channel images and efficient region access.
+"""
 
 import gc
+import os
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+import concurrent
+import concurrent.futures
+
+import numpy as np
+import pyvips
+import torch
+
+from slidevips.read_pyramid import get_pyramid_pyvips
 
 
 NUMPY_DTYPE_MAPPING = {
@@ -21,52 +31,162 @@ NUMPY_DTYPE_MAPPING = {
 }
 
 
+def calculate_magnification(mpp: float) -> Tuple[float, Optional[int]]:
+    """
+    Calculate the magnification of a microscope slide from its mpp (microns per pixel).
+
+    Args:
+    mpp (float): The microns per pixel value of the slide image.
+
+    Returns:
+    float: The estimated magnification of the slide.
+    """
+    magnifications = np.array([80, 40, 20, 10, 5])
+    absolute_magnification = (0.25 / mpp) * 40
+    if absolute_magnification < 2.5:
+        magnification = None
+    else:
+        dists = np.abs(absolute_magnification - magnifications)
+        mag_min_idx = dists.argmin()
+        magnification = magnifications[mag_min_idx]
+    return absolute_magnification, magnification
+
+
+def pyvips2numpy(pyvips_image, dtype):
+    """
+    Convert a PyVips image to a NumPy array.
+
+    Args:
+        pyvips_image (pyvips.Image): The PyVips image to convert.
+        dtype (str): The corresponding numpy data type of the pyvips image.
+
+    Returns:
+        np.ndarray: The converted NumPy array.
+
+    """
+    np_array = np.ndarray(buffer=pyvips_image.write_to_memory(),
+                          dtype=dtype,
+                          shape=[pyvips_image.height, pyvips_image.width, pyvips_image.bands])
+    return np_array
+
+
+def pyvips2torch(pyvips_image: pyvips.Image, dtype: np.dtype) -> torch.Tensor:
+    """
+    Convert a PyVips image to a Torch tensor.
+
+    Args:
+        pyvips_image (pyvips.Image): The PyVips image to convert.
+        dtype (numpy.dtype): The corresponding numpy data type of the pyvips image.
+
+    Returns:
+        torch.Tensor: The converted Torch tensor.
+
+    Raises:
+        NotImplementedError: If the specified data type is not supported.
+
+    """
+    if dtype == np.uint16:
+        np_array = pyvips2numpy(pyvips_image, dtype)
+        np_array = np_array.astype(np.int32)
+        torch_array = torch.from_numpy(np_array)
+    elif dtype == np.uint8:
+        torch_array = torch.frombuffer(
+            pyvips_image.write_to_memory(), dtype=torch.uint8
+            ).reshape(pyvips_image.height, pyvips_image.width, pyvips_image.bands)
+    else:
+        raise NotImplementedError
+    torch_array = torch.transpose(torch_array, 0, 2)
+    return torch_array
+
+
+def pyvips_fetch_region(image: pyvips.Image, left: int, top: int, width: int, height: int,
+                        reiter_fetch: bool = False) -> pyvips.Image:
+    """
+    Fetch a region from the image.
+
+    Args:
+        image (pyvips.Image): The image to crop from.
+        left (int): The left coordinate of the region.
+        top (int): The top coordinate of the region.
+        width (int): The width of the region.
+        height (int): The height of the region.
+
+    Returns:
+        pyvips.Image: The cropped region.
+    """
+    if reiter_fetch:
+        stop = False
+        while not stop:
+            try:
+                region = image.crop(left, top, width, height)
+                stop = True
+            except pyvips.Error:
+                continue
+    else:
+        region = image.crop(left, top, width, height)
+    return region
+
+
 class SlideVips:
     """
-    A class representing a slide in the SlideVips library. Native implementation
-        that uses default crop function.
+    A WSI reader class using the pyvips library to read whole slide images (WSI).
+
+    This class mimics OpenSlide using the pyvips library. It provides methods to read regions from
+    a whole slide image, write regions to files, and get thumbnails of the slide. It supports
+    reading images in different modes (e.g., RGB, IF) and allows for channel selection. Unlike
+    OpenSlide, SlideVips can read multi-channel images like mIF images.
 
     Args:
         filepath (str): The path to the slide file.
-        channel_idxs (list, optional): List of channel indexes to keep. Defaults to None.
-        mode (str, optional): The mode of the slide. Defaults to "RGB".
-        reiter_fetch (bool): Try to load the tile until no Error. Usefull when data is on nfs.
-
+        channel_idxs (list, optional): List of channel indexes to keep. Defaults to None
+            (keeping all).
+        mode (str, optional): The mode of the slide. Defaults to "RGB" ("RGB" or "mIF").
+        reiter_fetch (bool): Try to load the tile until no Error. Useful when data is on nfs.
+            Mostly deprecated, try using False.
     Attributes:
-        pyramid_image (list): List of pyramid images.
-        fields (dict): Dictionary containing slide fields.
-        level_count (int): The number of levels in the slide.
-        magnification (int): The magnification of the slide.
-        dimensions (tuple): The dimensions of the slide.
-        level_dimensions (numpy.ndarray): Array of level dimensions.
-        level_downsamples (numpy.ndarray): Array of level downsamples.
-        level_magnifications (numpy.ndarray): Array of level magnifications.
-        downsample (float): The downsample of the slide.
-        mode (str): The mode of the slide.
-        slide_name (str): The name of the slide.
-        dtype (str): The data type of the slide.
-        dtype_numpy (str): The corresponding numpy data type.
-        _reiter_fetch (bool): If we persist to load a tile if there is an error.
-
+        pyramid_image (list of pyvips.Image): List of pyramid pyvips images at each level.
+        fields (dict): Dictionary containing slide field metadata (e.g., mpp).
+        level_count (int): The number of levels in the slide pyramid.
+        mpp (float): Microns per pixel for the base image.
+        absolute_magnification (float): Estimated absolute magnification.
+        magnification (Optional[int]): Closest standard magnification (e.g., 40, 20, 10).
+        dimensions (numpy.ndarray): Dimensions (width, height) of the base level.
+        level_dimensions (numpy.ndarray): Array of (width, height) for each pyramid level.
+        level_factor (numpy.ndarray): Scaling factor for each level relative to base.
+        level_downsamples (numpy.ndarray): Downsample factor for each level.
+        level_magnifications (numpy.ndarray): Magnification for each level.
+        level_resolutions (numpy.ndarray): Microns per pixel for each level.
+        slide_name (str): The name of the slide (file stem).
+        n_channels (int): Number of channels in the image.
+        mode (str): The mode of the slide ("RGB" or "IF").
+        dtype (str): The pyvips data type of the slide.
+        dtype_numpy (numpy.dtype): The corresponding numpy data type.
+        _reiter_fetch (bool): If True, persistently tries to load a tile if there is an error.
     Methods:
-        read_region: Read a region from the slide.
-        read_region_torch: Read a region from the slide and convert it to a torch tensor.
-        read_regions: Read multiple regions from the slide.
-        write_region: Write a region from the slide to a file.
-        write_regions: Write multiple regions from the slide to files.
-        get_thumbnail: Get a thumbnail of the slide.
-        close: Close the slide.
+        compute_spatial_attributes(mpp): Compute and set spatial attributes for the slide.
+        resize(scale_factor): Resize all pyramid images and update spatial attributes.
+        read_region(location, level, size): Read a region from the slide as a numpy array.
+        read_region_torch(location, level, size): Read a region as a torch tensor.
+        read_regions(locations, level, size): Read multiple regions in parallel as numpy arrays.
+        write_region(folder, location, level, size, img_format, filename): Write a region to file.
+        write_regions(folder, locations, level, size, img_format): Write multiple regions to files.
+        get_thumbnail(size): Get a thumbnail of the slide as a numpy array.
+        prune_pyramid(level): Keep only the specified pyramid level in memory.
+        close(): Close the slide and clear resources.
     """
 
     def __init__(self, filepath: str, channel_idxs: List[int] = None, mode: str = "RGB",
                  reiter_fetch: bool = False) -> None:
         """
-        Initializes a Reader object.
+        Initialize a SlideVips WSI reader object.
 
         Args:
-            filepath (str): The path to the image file.
-            channel_idxs (list, optional): List of channel indices to keep. Defaults to None.
-            mode (str, optional): The mode of the image. Defaults to "RGB".
+            filepath (str): The path to the slide file.
+            channel_idxs (list, optional): List of channel indexes to keep. Defaults to None
+                (keeping all).
+            mode (str, optional): The mode of the slide. Defaults to "RGB" ("RGB" or "mIF").
+            reiter_fetch (bool): Try to load the tile until no Error. Useful when data is on nfs.
+                Mostly deprecated, try using False.
         """
         # keep only some channels
         pyvips.cache_set_max(0)
@@ -92,58 +212,79 @@ class SlideVips:
         self.dtype_numpy = NUMPY_DTYPE_MAPPING[self.dtype]
         self._reiter_fetch = reiter_fetch
 
-    def compute_spatial_attributes(self, mpp):
+    def compute_spatial_attributes(self, mpp) -> None:
         """
-        Blabla
+        Compute and set spatial attributes for the slide image based on micron per pixel.
+
+        Args:
+            mpp (float): Microns per pixel value for the base image.
         """
         self.absolute_magnification, self.magnification = calculate_magnification(mpp)
         self.dimensions = np.array([self.pyramid_image[0].width, self.pyramid_image[0].height])
-        self.level_dimensions = np.array([(image.width, image.height) \
-                                            for image in self.pyramid_image])
+        self.level_dimensions = np.array([(image.width, image.height)
+                                          for image in self.pyramid_image])
         self.level_factor = self.level_dimensions / self.dimensions
-        self.level_downsamples = np.mean(1 / self.level_factor, axis=1) # same as openslide
+        self.level_downsamples = np.mean(1 / self.level_factor, axis=1)  # same as openslide
         self.level_magnifications = self.magnification * self.level_dimensions / \
             self.dimensions
         self.level_resolutions = mpp * self.level_downsamples
 
-    def resize(self, scale_factor: None):
+    def resize(self, scale_factor: float) -> None:
         """
-        Blabla
+        Resize all pyramid images with scale factor and update spatial attributes.
+
+        Args:
+            scale_factor (float): The factor by which to resize the images.
         """
         for level, image in enumerate(self.pyramid_image):
             self.pyramid_image[level] = image.resize(scale_factor)
         self.mpp = self.mpp / scale_factor
         self.compute_spatial_attributes(self.mpp)
 
+    def set_concurrency(self, concurrency: int) -> None:
+        """
+        Set the concurrency level for each image in the pyramid.
+
+        This method iterates over all image levels in the pyramid, creates a copy of each image,
+        sets its concurrency property, and updates the pyramid image with the modified copy. Useful
+        when using SlideVips in a torch dataloader.
+        Args:
+            concurrency (int): The number of concurrent threads or processes to use for image
+                operations.
+        Returns:
+            None
+        """
+        for level in range(self.level_count):
+            image = self.pyramid_image[level].copy()
+            image.set_type(pyvips.GValue.gint_type, "concurrency", concurrency)
+            self.pyramid_image[level] = image
+
     def read_region(self, location: Tuple[int, int], level: int,
                     size: Tuple[int, int]) -> np.ndarray:
         """
-        Read a region from the slide at the specified location, level, and size.
+        Read a region/tile from the slide at the specified location, level, and size.
 
         Args:
-            location (tuple): The top-left coordinates of the region.
-            level (int): The zoom level of the region.
+            location (tuple): The top-left coordinates of the region. Like OpenSlide, the location
+                is in pixels at the lowest resolution.
+            level (int): The pyramid level of the region.
             size (tuple): The width and height of the region.
-
         Returns:
             numpy.ndarray: The region as a NumPy array.
         """
         region = self._pyvips_crop_region(location, level, size).numpy()
-        region_array = region
-        #region_array = pyvips2numpy(region, self.dtype_numpy)
-
-        return region_array
+        return region
 
     def read_region_torch(self, location: Tuple[int, int], level: int,
                           size: Tuple[int, int]) -> torch.Tensor:
         """
-        Reads a region from the image using pyvips and converts it to a torch tensor.
+        Read a region/tile from the image using pyvips and converts it to a torch tensor.
 
         Args:
-            location (tuple): The top-left coordinates of the region.
-            level (int): The zoom level of the region.
+            location (tuple): The top-left coordinates of the region. Like OpenSlide, the location
+                is in pixels at the lowest resolution.
+            level (int): The pyramid level of the region.
             size (tuple): The width and height of the region.
-
         Returns:
             torch.Tensor: The region as a torch tensor.
         """
@@ -153,13 +294,13 @@ class SlideVips:
 
     def read_regions(self, locations: List[Tuple[int, int]], level: int, size: int) -> np.ndarray:
         """
-        Reads regions from the specified locations in parallel using ThreadPoolExecutor.
+        Read regions/tiles from the specified locations in parallel using ThreadPoolExecutor.
 
         Args:
-            locations (list): List of locations to read regions from.
+            locations (list): List of locations to read regions from. Like OpenSlide, the location
+                is in pixels at the lowest resolution.
             level (int): Level of the regions to read.
             size (int): Size of the regions to read.
-
         Returns:
             numpy.ndarray: Array of regions read from the specified locations.
         """
@@ -167,7 +308,8 @@ class SlideVips:
         regions = [None] * len(locations)
         with concurrent.futures.ThreadPoolExecutor() as executor:
             # Submit tasks for each location and store the futures with their index
-            future_to_index = {executor.submit(self.read_region, location, level, size): i for i, location in enumerate(locations)}
+            future_to_index = {executor.submit(self.read_region, location, level, size): i
+                               for i, location in enumerate(locations)}
 
             # Collect the results as they become available, using the index to place them correctly
             for future in concurrent.futures.as_completed(future_to_index):
@@ -187,23 +329,23 @@ class SlideVips:
                      size: Tuple[int, int], img_format: str = ".png",
                      filename: Optional[str] = None) -> str:
         """
-        Writes a region of the slide to an image file.
+        Write a region of the slide to an image file.
 
         Args:
             folder (str): The folder where the image file will be saved.
-            location (tuple): The top-left coordinates of the region.
-            level (int): The zoom level of the region.
+            location (tuple): The top-left coordinates of the region. Like OpenSlide, the location
+                is in pixels at the lowest resolution.
+            level (int): The pyramid level of the region.
             size (tuple): The width and height of the region.
             img_format (str, optional): The image format of the output file. Defaults to ".png".
             filename (str, optional): The name of the output file. If not provided, a filename
                 will be generated based on the slide name, location, level, size, and image format.
-
         Returns:
             str: The path to the saved image file.
         """
         if filename is None:
             image_path = Path(folder) / "{}_{}_{}_{}_{}_{}{}".format(
-            self.slide_name, *location, level, *size, img_format)
+                self.slide_name, *location, level, *size, img_format)
         else:
             image_path = Path(folder) / filename
         region = self._pyvips_crop_region(location, level, size)
@@ -213,13 +355,14 @@ class SlideVips:
     def write_regions(self, folder: str, locations: List[Tuple[int, int]], level: int,
                       size: int, img_format: str = ".png") -> List[str]:
         """
-        Write regions of an image to files in the specified folder in parallel
-            using ThreadPoolExecutor.
+        Write regions of an image to files in the specified folder in parallel \
+        using ThreadPoolExecutor.
 
         Args:
             folder (str): The folder path where the image regions will be saved.
-            locations (list): A list of locations specifying the regions to be written.
-            level (int): The zoom level of the image.
+            locations (list): A list of locations specifying the regions to be written. Like
+                OpenSlide, the location is in pixels at the lowest resolution.
+            level (int): The pyramid level of the image.
             size (int): The size of the image regions.
             img_format (str, optional): The format of the saved image files. Defaults to ".png".
 
@@ -248,11 +391,15 @@ class SlideVips:
         """
         Crop a region from the pyramid image at the specified level.
 
+        Use Pyvips operations to extract a pyvips region at the specified location and level.
+        Natively Pyvips raises an error if the region is outside the image boundaries. This method
+        handles this by checking the boundaries and creating a black image if the region is
+        partially outside the image boundaries (OpenSlide behaviour).
         Args:
-            location (tuple): The top-left coordinates of the region.
+            location (tuple): The top-left coordinates of the region. Like OpenSlide, the location
+                is in pixels at the lowest resolution.
             level (int): The level of the pyramid image to crop from.
             size (tuple): The width and height of the region.
-
         Returns:
             pyvips.Image: The cropped region.
         """
@@ -265,7 +412,7 @@ class SlideVips:
 
         # Check if the region is completely within the image boundaries
         if (0 <= left < image.width and 0 <= top < image.height and
-            left + width <= image.width and top + height <= image.height):
+                left + width <= image.width and top + height <= image.height):
             region = pyvips_fetch_region(image, left, top, width,
                                          height, self._reiter_fetch)
         else:
@@ -298,11 +445,10 @@ class SlideVips:
 
     def get_thumbnail(self, size: Tuple[int, int]) -> np.ndarray:
         """
-        Get a thumbnail of the image.
+        Get a thumbnail of the image at the specified size.
 
         Args:
             size: A tuple representing the desired width and height of the thumbnail.
-
         Returns:
             thumbnail_array: A numpy array representing the thumbnail image.
         """
@@ -334,9 +480,7 @@ class SlideVips:
             raise ValueError("Pyramid image does not exist")
 
     def close(self) -> None:
-        """
-        Closes the reader and clears the pyramid image if it exists.
-        """
+        """Close the reader and clears the pyramid image if it exists."""
         if hasattr(self, "pyramid_image"):
             if self.pyramid_image:
                 for image in self.pyramid_image:
@@ -345,255 +489,160 @@ class SlideVips:
             gc.collect()
 
     def __del__(self):
-        """
-        Destructor method that closes the reader.
-        """
+        """Destructor method that closes the reader."""
         self.close()
 
 
-def pyvips_fetch_region(image, left, top, width, height, reiter_fetch=False):
-    """
-    Helper function to fetch a region from the image.
-
-    Args:
-        image (pyvips.Image): The image to crop from.
-        left (int): The left coordinate of the region.
-        top (int): The top coordinate of the region.
-        width (int): The width of the region.
-        height (int): The height of the region.
-
-    Returns:
-        pyvips.Image: The cropped region.
-    """
-    if reiter_fetch:
-        stop = False
-        while not stop:
-            try:
-                region = image.crop(left, top, width, height)
-                stop = True
-            except pyvips.Error:
-                continue
-    else:
-        region = image.crop(left, top, width, height)
-    return region
-
-
-class RegionSlideVips(SlideVips):
-    """
-    A class representing a slide in the SlideVips library using the Region
-        and fetch access to the tiles.
-
-    Args:
-        filepath (str): The path to the slide image file.
-        channel_idxs (list, optional): List of channel indexes to read. Defaults to None.
-        mode (str, optional): The mode to read the image in. Defaults to "RGB".
-    """
-
-    def __init__(self, filepath: str, channel_idxs=None, mode="RGB", reiter_fetch=False) -> None:
-        super().__init__(filepath, channel_idxs, mode, reiter_fetch)
-        self.pyramid_region = [pyvips.Region.new(image) for image in self.pyramid_image]
-
-    def read_region(self, location, level: int, size) -> np.ndarray:
-        """
-        Reads a region from the image using pyvips region.
-
-        Args:
-            location (tuple): The top-left coordinates of the region.
-            level (int): The zoom level of the region.
-            size (tuple): The width and height of the region.
-
-        Returns:
-            np.ndarray: The region as a numpy array.
-        """
-        region_array = self._read_region_wrapper(location, level, size,
-                                                 self.dtype_numpy, mode="numpy")
-        return region_array
-
-    def read_region_torch(self, location: Tuple[int, int], level: int,
-                          size: Tuple[int, int]) -> torch.Tensor:
-        """
-        Reads a region from the image using pyvips region and converts it to a torch tensor.
-
-        Args:
-            location (tuple): The top-left coordinates of the region.
-            level (int): The zoom level of the region.
-            size (tuple): The width and height of the region.
-
-        Returns:
-            torch.Tensor: The region as a torch tensor.
-        """
-        if self.dtype_numpy == np.uint16:
-            region_array = self.read_region(location, level, size)
-            region_array = region_array.astype(np.int32)
-            region_torch = torch.from_numpy(region_array)
-        elif self.dtype_numpy == np.uint8:
-            region_torch = self._read_region_wrapper(location, level, size,
-                                                     torch.uint8, mode="torch")
-        else:
-            raise NotImplementedError
-        region_torch = torch.permute(region_torch, (2, 0, 1))
-        return region_torch
-
-    def _read_region_wrapper(self, location: Tuple[int, int], level: int,
-                             size: Tuple[int, int], dtype, mode: str) -> np.ndarray:
-        """
-        Wrapper function for reading a region from the image.
-
-        Args:
-            location (tuple): The top-left coordinates of the region.
-            level (int): The zoom level of the region.
-            size (tuple): The width and height of the region.
-            dtype: The data type of the region.
-            mode (str): The mode of reading the region. Should be either "numpy" or "torch".
-
-        Returns:
-            np.ndarray: The region as a numpy array.
-        """
-        region_level = self.pyramid_region[level]
-        #image_level = self.pyramid_image[level]
-        location_level = location * self.level_factor[level]
-
-        # Image dimensions at the current level
-        image_width, image_height = self.level_dimensions[level]
-
-        # Calculate the boundaries of the requested region
-        start_x, start_y = int(location_level[0]), int(location_level[1])
-        end_x, end_y = start_x + size[0], start_y + size[1]
-
-        # Check if the requested region is entirely outside the image boundaries
-        if start_x >= image_width or start_y >= image_height or end_x <= 0 or end_y <= 0:
-            raise ValueError("Requested region is outside the slide boundaries.")
-
-        # Determine if padding is needed
-        pad_left = -min(start_x, 0)
-        pad_top = -min(start_y, 0)
-        pad_right = max(end_x - image_width, 0)
-        pad_bottom = max(end_y - image_height, 0)
-
-        # Adjust start and end if they are out of bounds
-        start_x = max(start_x, 0)
-        start_y = max(start_y, 0)
-        end_x = min(end_x, image_width)
-        end_y = min(end_y, image_height)
-
-        # Fetch the region
-        if self._reiter_fetch:
-            stop = False
-            while not stop:
-                try:
-                    buffer = region_level.fetch(start_x, start_y, end_x - start_x, end_y - start_y)
-                    stop = True
-                except pyvips.Error:
-                    continue
-        else:
-            buffer = region_level.fetch(start_x, start_y, end_x - start_x, end_y - start_y)
-        if mode == "torch":
-            fetched_region = torch.frombuffer(buffer, dtype=torch.uint8).reshape(
-                end_y - start_y, end_x - start_x, self.n_channels)
-        else:
-            fetched_region = np.ndarray(buffer=buffer, dtype=dtype,
-                                        shape=[end_y - start_y, end_x - start_x, self.n_channels])
-        #pyvips.vips_lib.vips_region_invalidate(region_level.pointer)
-        #image_level.invalidate()
-
-        # Apply padding if needed
-        if any([pad_left, pad_top, pad_right, pad_bottom]):
-            # Create an array with padding
-            if mode == "torch":
-                padded_region = torch.zeros((size[1], size[0], self.n_channels), dtype=dtype)
-            else:
-                padded_region = np.zeros((size[1], size[0], self.n_channels), dtype=dtype)
-            padded_region[pad_top: pad_top + fetched_region.shape[0],
-                          pad_left: pad_left + fetched_region.shape[1]] = fetched_region
-            return padded_region
-        else:
-            # Return the fetched region directly if no padding is needed
-            return fetched_region
-
-    def get_thumbnail(self, size: Tuple[int, int]) -> ndarray:
-        idx_dim = np.abs(self.dimensions - np.asarray(size)).argmax()
-
-        scaling = size[idx_dim] / self.dimensions[idx_dim]
-
-        thumbnail_size = np.int32(np.round(self.dimensions * scaling))
-
-        level_dims = self.level_dimensions.copy()
-        level_dims = level_dims[np.all(level_dims > thumbnail_size, axis=1)]
-        level_thumbnail = np.linalg.norm(thumbnail_size - level_dims, axis=1).argmin()
-        level_dim = self.level_dimensions[level_thumbnail]
-        if level_dim[0] * level_dim[1] > 225000000:
-            raise ValueError("The thumbnail is too large to be processed.")
-        image = self.pyramid_region[level_thumbnail]
-        buffer = image.fetch(0, 0, level_dim[0], level_dim[1])
-        thumbnail = np.ndarray(buffer=buffer, dtype=self.dtype_numpy,
-                                    shape=[level_dim[1], level_dim[0], self.n_channels])
-        thumbnail = cv2.resize(thumbnail, tuple(thumbnail_size), cv2.INTER_LINEAR)
-        return thumbnail
-
-
-def pyvips2numpy(pyvips_image, dtype):
-    """
-    Convert a PyVips image to a NumPy array.
-
-    Args:
-        pyvips_image (pyvips.Image): The PyVips image to convert.
-        dtype (str): The corresponding numpy data type of the pyvips image.
-
-    Returns:
-        np.ndarray: The converted NumPy array.
-
-    """
-    np_array = np.ndarray(buffer=pyvips_image.write_to_memory(),
-                          dtype=dtype,
-                          shape=[pyvips_image.height, pyvips_image.width, pyvips_image.bands])
-    return np_array
-
-
-def pyvips2torch(pyvips_image, dtype):
-    """
-    Convert a PyVips image to a Torch tensor.
-
-    Args:
-        pyvips_image (pyvips.Image): The PyVips image to convert.
-        dtype (numpy.dtype): The corresponding numpy data type of the pyvips image.
-
-    Returns:
-        torch.Tensor: The converted Torch tensor.
-
-    Raises:
-        NotImplementedError: If the specified data type is not supported.
-
-    """
-    if dtype == np.uint16:
-        np_array = pyvips2numpy(pyvips_image, dtype)
-        np_array = np_array.astype(np.int32)
-        torch_array = torch.from_numpy(np_array)
-    elif dtype == np.uint8:
-        torch_array = torch.frombuffer(
-            pyvips_image.write_to_memory(), dtype=torch.uint8
-            ).reshape(pyvips_image.height, pyvips_image.width, pyvips_image.bands)
-    else:
-        raise NotImplementedError
-    torch_array = torch.transpose(torch_array, 0, 2)
-    return torch_array
-
-
-def calculate_magnification(mpp: float) -> Tuple[float, Optional[int]]:
-    """
-    Calculate the magnification of a microscope slide from its mpp (microns per pixel).
-
-    Args:
-    mpp (float): The microns per pixel value of the slide image.
-
-    Returns:
-    float: The estimated magnification of the slide.
-    """
-    magnifications = np.array([80, 40, 20, 10, 5])
-    absolute_magnification = (0.25 / mpp) * 40
-    if absolute_magnification < 2.5:
-        magnification = None
-    else:
-        dists = np.abs(absolute_magnification - magnifications)
-        mag_min_idx = dists.argmin()
-        magnification = magnifications[mag_min_idx]
-    return absolute_magnification, magnification
+# Deprecated: Huge RAM issue
+# class RegionSlideVips(SlideVips):
+#     """
+#     A class representing a slide in the SlideVips library using the Region
+#         and fetch access to the tiles.
+#
+#     Args:
+#         filepath (str): The path to the slide image file.
+#         channel_idxs (list, optional): List of channel indexes to read. Defaults to None.
+#         mode (str, optional): The mode to read the image in. Defaults to "RGB".
+#     """
+#
+#     def __init__(self, filepath: str, channel_idxs=None, mode="RGB", reiter_fetch=False) -> None:
+#         super().__init__(filepath, channel_idxs, mode, reiter_fetch)
+#         self.pyramid_region = [pyvips.Region.new(image) for image in self.pyramid_image]
+#
+#     def read_region(self, location, level: int, size) -> np.ndarray:
+#         """
+#         Reads a region from the image using pyvips region.
+#
+#         Args:
+#             location (tuple): The top-left coordinates of the region.
+#             level (int): The zoom level of the region.
+#             size (tuple): The width and height of the region.
+#
+#         Returns:
+#             np.ndarray: The region as a numpy array.
+#         """
+#         region_array = self._read_region_wrapper(location, level, size,
+#                                                  self.dtype_numpy, mode="numpy")
+#         return region_array
+#
+#     def read_region_torch(self, location: Tuple[int, int], level: int,
+#                           size: Tuple[int, int]) -> torch.Tensor:
+#         """
+#         Reads a region from the image using pyvips region and converts it to a torch tensor.
+#
+#         Args:
+#             location (tuple): The top-left coordinates of the region.
+#             level (int): The zoom level of the region.
+#             size (tuple): The width and height of the region.
+#
+#         Returns:
+#             torch.Tensor: The region as a torch tensor.
+#         """
+#         if self.dtype_numpy == np.uint16:
+#             region_array = self.read_region(location, level, size)
+#             region_array = region_array.astype(np.int32)
+#             region_torch = torch.from_numpy(region_array)
+#         elif self.dtype_numpy == np.uint8:
+#             region_torch = self._read_region_wrapper(location, level, size,
+#                                                      torch.uint8, mode="torch")
+#         else:
+#             raise NotImplementedError
+#         region_torch = torch.permute(region_torch, (2, 0, 1))
+#         return region_torch
+#
+#     def _read_region_wrapper(self, location: Tuple[int, int], level: int,
+#                              size: Tuple[int, int], dtype, mode: str) -> np.ndarray:
+#         """
+#         Wrapper function for reading a region from the image.
+#
+#         Args:
+#             location (tuple): The top-left coordinates of the region.
+#             level (int): The zoom level of the region.
+#             size (tuple): The width and height of the region.
+#             dtype: The data type of the region.
+#             mode (str): The mode of reading the region. Should be either "numpy" or "torch".
+#
+#         Returns:
+#             np.ndarray: The region as a numpy array.
+#         """
+#         region_level = self.pyramid_region[level]
+#         # image_level = self.pyramid_image[level]
+#         location_level = location * self.level_factor[level]
+#
+#         # Image dimensions at the current level
+#         image_width, image_height = self.level_dimensions[level]
+#
+#         # Calculate the boundaries of the requested region
+#         start_x, start_y = int(location_level[0]), int(location_level[1])
+#         end_x, end_y = start_x + size[0], start_y + size[1]
+#
+#         # Check if the requested region is entirely outside the image boundaries
+#         if start_x >= image_width or start_y >= image_height or end_x <= 0 or end_y <= 0:
+#             raise ValueError("Requested region is outside the slide boundaries.")
+#
+#         # Determine if padding is needed
+#         pad_left = -min(start_x, 0)
+#         pad_top = -min(start_y, 0)
+#         pad_right = max(end_x - image_width, 0)
+#         pad_bottom = max(end_y - image_height, 0)
+#
+#         # Adjust start and end if they are out of bounds
+#         start_x = max(start_x, 0)
+#         start_y = max(start_y, 0)
+#         end_x = min(end_x, image_width)
+#         end_y = min(end_y, image_height)
+#
+#         # Fetch the region
+#         if self._reiter_fetch:
+#             stop = False
+#             while not stop:
+#                 try:
+#                     buffer = region_level.fetch(start_x, start_y, end_x - start_x,
+#                                                 end_y - start_y)
+#                     stop = True
+#                 except pyvips.Error:
+#                     continue
+#         else:
+#             buffer = region_level.fetch(start_x, start_y, end_x - start_x, end_y - start_y)
+#         if mode == "torch":
+#             fetched_region = torch.frombuffer(buffer, dtype=torch.uint8).reshape(
+#                 end_y - start_y, end_x - start_x, self.n_channels)
+#         else:
+#             fetched_region = np.ndarray(buffer=buffer, dtype=dtype,
+#                                         shape=[end_y - start_y, end_x - start_x, self.n_channels])
+#         # pyvips.vips_lib.vips_region_invalidate(region_level.pointer)
+#         # image_level.invalidate()
+#
+#         # Apply padding if needed
+#         if any([pad_left, pad_top, pad_right, pad_bottom]):
+#             # Create an array with padding
+#             if mode == "torch":
+#                 padded_region = torch.zeros((size[1], size[0], self.n_channels), dtype=dtype)
+#             else:
+#                 padded_region = np.zeros((size[1], size[0], self.n_channels), dtype=dtype)
+#             padded_region[pad_top: pad_top + fetched_region.shape[0],
+#                           pad_left: pad_left + fetched_region.shape[1]] = fetched_region
+#             return padded_region
+#         else:
+#             # Return the fetched region directly if no padding is needed
+#             return fetched_region
+#
+#     def get_thumbnail(self, size: Tuple[int, int]) -> ndarray:
+#         idx_dim = np.abs(self.dimensions - np.asarray(size)).argmax()
+#
+#         scaling = size[idx_dim] / self.dimensions[idx_dim]
+#
+#         thumbnail_size = np.int32(np.round(self.dimensions * scaling))
+#
+#         level_dims = self.level_dimensions.copy()
+#         level_dims = level_dims[np.all(level_dims > thumbnail_size, axis=1)]
+#         level_thumbnail = np.linalg.norm(thumbnail_size - level_dims, axis=1).argmin()
+#         level_dim = self.level_dimensions[level_thumbnail]
+#         if level_dim[0] * level_dim[1] > 225000000:
+#             raise ValueError("The thumbnail is too large to be processed.")
+#         image = self.pyramid_region[level_thumbnail]
+#         buffer = image.fetch(0, 0, level_dim[0], level_dim[1])
+#         thumbnail = np.ndarray(buffer=buffer, dtype=self.dtype_numpy,
+#                                shape=[level_dim[1], level_dim[0], self.n_channels])
+#         thumbnail = cv2.resize(thumbnail, tuple(thumbnail_size), cv2.INTER_LINEAR)
+#         return thumbnail
