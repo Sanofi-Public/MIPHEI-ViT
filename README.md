@@ -11,6 +11,9 @@
   <a href="https://github.com/Sanofi-Public/MIPHEI-ViT" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
     <img src="https://img.shields.io/badge/GitHub-Code-black?logo=github" height="25">
   </a>
+  <a href="https://huggingface.co/Estabousi/MIPHEI-vit" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+    <img src="https://img.shields.io/badge/HuggingFace-Model-yellow?logo=huggingface" height="25">
+  </a>
   <a href="https://huggingface.co/spaces/Estabousi/MIPHEI-vit-demo" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
     <img src="https://img.shields.io/badge/Gradio-Demo-yellow?logo=gradio" height="25">
   </a>
