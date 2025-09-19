@@ -17,6 +17,9 @@ import torch
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
+from torchmetrics import MetricCollection
+from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
+
 import pyvips  # Avoid pyvips import error from src.dataset
 
 from eval_utils import train_xgboost
@@ -26,8 +29,7 @@ from src.dataset import (
     get_width_height,
     NormalizationLayer,
     get_effective_width_height,
-    TileImg2ImgSlideDataset,
-    get_input_mean_std,
+    TileImg2ImgSlideDataset
 )
 from src.generators import get_generator
 from src.generators.hemit_models import resize_embed_hemit_statedict
@@ -56,16 +58,13 @@ if __name__ == "__main__":
             cfg.data[key] = cfg_data.data[key]
 
     slide_dataframe = pd.read_csv(cfg.data.slide_dataframe_path)
-    dataframe = pd.concat((
+    train_val_dataframe = pd.concat((
         pd.read_csv(cfg.data.train_dataframe_path),
         pd.read_csv(cfg.data.val_dataframe_path),
-        pd.read_csv(cfg.data.test_dataframe_path)))
-    dataframe["target_path"] = dataframe["image_path"]
+        ))
+    test_dataframe = pd.read_csv(cfg.data.test_dataframe_path)
 
-    with open(Path("..") / cfg.data.channel_stats_path, "r") as f:
-        channel_stats = json.load(f)
-
-    width, height = get_width_height(dataframe)
+    width, height = get_width_height(train_val_dataframe)
     width, height = get_effective_width_height(width, height, train=True)
     if inference_40x:
         inference_width = width
@@ -74,13 +73,16 @@ if __name__ == "__main__":
         inference_width = width // 2
         inference_height = height // 2
 
-    nc_out = len(cfg.data.targ_channel_names)
+    channel_names = cfg.data.targ_channel_names
+    nc_out = len(channel_names)
     nc_in = 3
     print("{} width / {} height".format(width, height))
     print("{} inputs channels / {} output channels".format(nc_in, nc_out))
 
-    channel_stats_rgb = get_input_mean_std(cfg, channel_stats["RGB"])
+    channel_stats_rgb = {"mean": cfg.data.normalization.mean,
+                         "std": cfg.data.normalization.std}
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
+    preprocess_target_fn = NormalizationLayer(mode="if")
 
     torch.cuda.empty_cache()
 
@@ -106,22 +108,41 @@ if __name__ == "__main__":
         validate_load_info(load_info)
     generator = generator.eval().cuda().half()
 
-    dataset = TileImg2ImgSlideDataset(
-            dataframe=dataframe, preprocess_input_fn=preprocess_input_fn,
+    train_val_dataset = TileImg2ImgSlideDataset(
+            dataframe=train_val_dataframe, preprocess_input_fn=preprocess_input_fn,
+            preprocess_target_fn=preprocess_target_fn,
+            spatial_augmentations=None, return_nuclei=True)
+    test_dataset = TileImg2ImgSlideDataset(
+            dataframe=test_dataframe, preprocess_input_fn=preprocess_input_fn,
+            preprocess_target_fn=preprocess_target_fn,
             spatial_augmentations=None, return_nuclei=True)
 
     num_workers = 6
     batch_size = 4
     device = "cpu"
-    dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, pin_memory=device != "cpu",
+    train_val_dataloader = torch.utils.data.DataLoader(
+        train_val_dataset, batch_size=batch_size, pin_memory=device != "cpu",
+        shuffle=False, drop_last=False, num_workers=num_workers
+    )
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=batch_size, pin_memory=device != "cpu",
         shuffle=False, drop_last=False, num_workers=num_workers
     )
 
-    cell_metrics = CellMetrics(slide_dataframe, marker_names=cfg.data.targ_channel_names,
+    cell_metrics = CellMetrics(slide_dataframe, marker_names=channel_names,
                                min_area=20).cuda()
+    test_pix_metrics = MetricCollection(
+            {
+                "psnr_metric": PeakSignalNoiseRatio(data_range=(-0.9, 0.9)),
+                "ssim_metric": StructuralSimilarityIndexMeasure(data_range=(-0.9, 0.9)),
+            }).cuda()
+    idxs_pix_metrics = [
+        channel_names.index("Pan-CK"),
+        channel_names.index("CD3e"),
+        channel_names.index("Hoechst")
+    ] # HEMIT: Pan-CK, CD3e, Hoechst order
 
-    for batch in tqdm(dataloader):
+    for batch in tqdm(train_val_dataloader):
         x = batch["image"].cuda()
         nuclei_masks = batch["nuclei"].cuda()
         slide_names = batch["slide_name"]
@@ -134,6 +155,21 @@ if __name__ == "__main__":
 
         cell_metrics.update(out, nuclei_masks, slide_names)
 
+    for batch in tqdm(test_dataloader):
+        x = batch["image"].cuda()
+        y = batch["target"].cuda()
+        nuclei_masks = batch["nuclei"].cuda()
+        slide_names = batch["slide_name"]
+
+        with torch.inference_mode():
+            x = torch.nn.functional.interpolate(x, (inference_width, inference_height),
+                                                mode="bilinear")
+            out = generator(x.half()).float()
+            out = torch.nn.functional.interpolate(out, (width, height), mode="bilinear")
+
+        cell_metrics.update(out, nuclei_masks, slide_names)
+        test_pix_metrics.update(out[:, idxs_pix_metrics].clip(-0.9, 0.9), y)
+
     # Tricks to adapt to HEMIT markers
     marker_names = ["Pan-CK", "CD3"]
     cell_metrics.marker_cols = marker_names
@@ -144,13 +180,18 @@ if __name__ == "__main__":
 
     train_slide_names = list(pd.read_csv(cfg.data.train_dataframe_path)["in_slide_name"].unique())
     val_slide_names = list(pd.read_csv(cfg.data.val_dataframe_path)["in_slide_name"].unique())
-    test_slide_names = list(pd.read_csv(cfg.data.test_dataframe_path)["in_slide_name"].unique())
+    test_slide_names = list(test_dataframe["in_slide_name"].unique())
 
     # only 5% of cells from our pipeline
     train_cell_dataframe = cell_dataframe[cell_dataframe["slide_name"].isin(
         train_slide_names)].sample(frac=0.05, random_state=42)
     val_cell_dataframe = cell_dataframe[cell_dataframe["slide_name"].isin(val_slide_names)]
     test_cell_dataframe = cell_dataframe[cell_dataframe["slide_name"].isin(test_slide_names)]
+
+    # pixel level metrics
+    test_pix_dicts = {k: [v.cpu().item()] for k, v in test_pix_metrics.compute().items()}
+    results_pixel_df = pd.DataFrame(data=test_pix_dicts)
+    results_pixel_df.to_csv(str(Path(checkpoint_path).parent / "hemit_results_pixel.csv"), index=False)
 
     # cell level classification
     # logistic regression

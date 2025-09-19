@@ -63,9 +63,6 @@ def inference_model(cfg: DictConfig, checkpoint_dir: str, output_dir: str) -> No
     else:
         slide_dataframe = pd.read_csv(cfg.data.slide_dataframe_path)
 
-    with open(cfg.data.channel_stats_path, "r") as f:
-        channel_stats = json.load(f)
-
     width, height = get_width_height(test_dataframe)
     width, height = get_effective_width_height(width, height, train=True)
 
@@ -77,7 +74,9 @@ def inference_model(cfg: DictConfig, checkpoint_dir: str, output_dir: str) -> No
     log.info("{} width / {} height".format(width, height))
     log.info("{} inputs channels / {} output channels".format(nc_in, nc_out))
 
-    preprocess_input_fn = NormalizationLayer(channel_stats["RGB"], mode="he")
+    channel_stats_rgb = {"mean": cfg.data.normalization.mean,
+                         "std": cfg.data.normalization.std}
+    preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
     if from_slide:
         from slidevips.torch_datasets import SlideDataset

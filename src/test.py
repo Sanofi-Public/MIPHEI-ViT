@@ -72,7 +72,9 @@ def test_model(cfg: DictConfig, checkpoint_path: str, run_name: str) -> None:
     log.info("{} width / {} height".format(width, height))
     log.info("{} inputs channels / {} output channels".format(nc_in, nc_out))
 
-    preprocess_input_fn = NormalizationLayer(channel_stats["RGB"], mode="he")
+    channel_stats_rgb = {"mean": cfg.data.normalization.mean,
+                         "std": cfg.data.normalization.std}
+    preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
     channel_names = cfg.data.targ_channel_names
     targ_channel_idxs = [channel_stats[channel_name]["idx_channel"]

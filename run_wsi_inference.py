@@ -35,7 +35,7 @@ from slidevips.ome_metadata import adapt_ome_metadata
 from slidevips.tiling import get_locs_otsu
 from slidevips.torch_datasets import SlideDataset
 
-from src.dataset import NormalizationLayer, get_input_mean_std
+from src.dataset import NormalizationLayer
 from src.generators import get_generator
 from src.utils import validate_load_info
 
@@ -174,9 +174,8 @@ def wsi_inference(slide_path, checkpoint_dir, output_dir, level=0, tile_size=204
     #  Dataloader Loading.
     # ---------------------------------------------------------------
     # Create normalization layer for H&E input
-    with open(cfg.data.channel_stats_path, "r") as f:
-        channel_stats = json.load(f)
-    channel_stats_rgb = get_input_mean_std(cfg, channel_stats["RGB"])
+    channel_stats_rgb = {"mean": cfg.data.normalization.mean,
+                         "std": cfg.data.normalization.std}
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
     # If scale is not 1.0, resize tiles to target size; otherwise, no spatial augmentation

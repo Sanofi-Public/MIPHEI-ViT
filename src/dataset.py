@@ -134,41 +134,6 @@ def get_effective_width_height(width: int, height: int, train: bool = False) -> 
     return width, height
 
 
-def get_input_mean_std(cfg: DictConfig, channel_stats_rgb: dict) -> dict:
-    """
-    Get the mean and standard deviation for input normalization based on the model configuration.
-
-    When using a foundation model, mean and std are set to the stats used during its pretraining.
-    For other models, they are taken from the provided RGB stats. WARNING: MIPHEI-ViT currently uses
-    ImageNet stats to match the provided checkpoint, but if retraining, it would be better to
-    modify this function and use the stats from the foundation model's own pretraining like for
-    UNETR.
-    Args:
-        cfg (DictConfig): Hydra configuration containing model and encoder information.
-        channel_stats_rgb (dict): Dictionary with keys "mean" and "std" for RGB channel statistics.
-
-    Returns:
-        dict: A dictionary with keys "mean" and "std" containing the computed mean and standard
-            deviation arrays.
-
-    Raises:
-        AttributeError: If required attributes are missing from the configuration object.
-    """
-    if cfg.model.model_name == "mipheivit":
-        mean = np.asarray([0.485, 0.456, 0.406]) * 255
-        std = np.asarray([0.229, 0.224, 0.225]) * 255
-    elif cfg.model.model_name.startswith("unet"):
-        if cfg.model.encoder.encoder_name == "hoptimus0":  # cf HuggingFace card
-            mean = np.asarray([0.707223, 0.578729, 0.703617]) * 255
-            std = np.asarray([0.211883, 0.230117, 0.177517]) * 255
-        else:
-            mean = np.asarray([0.485, 0.456, 0.406]) * 255
-            std = np.asarray([0.229, 0.224, 0.225]) * 255
-    else:
-        mean, std = channel_stats_rgb["mean"], channel_stats_rgb["std"]
-    return {"mean": mean, "std": std}
-
-
 class DataModule:
     """
     DataModule for managing datasets and dataloaders for training, validation, and testing.

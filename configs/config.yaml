@@ -18,6 +18,9 @@ data:
   augmentation_dir: null  # Directory with precomputed augmentation images, cf TileAugmentationCallback (null if unused)
   channel_stats_path: channel_stats.json  # Path to channel statistics JSON file
   targ_channel_names: []  # List of target channel names (empty by default)
+  normalization:
+    mean: [123.675, 116.28 , 103.53]
+    std: [58.395, 57.12 , 57.375]
 
 train:
   epochs: 20  # Number of training epochs

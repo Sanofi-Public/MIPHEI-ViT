@@ -29,8 +29,7 @@ from src.dataset import (
     get_width_height,
     NormalizationLayer,
     get_effective_width_height,
-    TileImg2ImgSlideDataset,
-    get_input_mean_std,
+    TileImg2ImgSlideDataset
 )
 from src.generators import get_generator
 from src.generators.hemit_models import resize_embed_hemit_statedict
@@ -71,9 +70,6 @@ if __name__ == "__main__":
         lambda x: Path(x).stem).tolist()
     slide_dataframe["nuclei_csv_path"] = None
 
-    with open(Path("..") / cfg.data.channel_stats_path, "r") as f:
-        channel_stats = json.load(f)
-
     width, height = get_width_height(dataframe)
     width, height = get_effective_width_height(width, height, train=True)
 
@@ -82,7 +78,8 @@ if __name__ == "__main__":
     print("{} width / {} height".format(width, height))
     print("{} inputs channels / {} output channels".format(nc_in, nc_out))
 
-    channel_stats_rgb = get_input_mean_std(cfg, channel_stats["RGB"])
+    channel_stats_rgb = {"mean": cfg.data.normalization.mean,
+                         "std": cfg.data.normalization.std}
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
     torch.cuda.empty_cache()

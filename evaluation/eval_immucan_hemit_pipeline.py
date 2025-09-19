@@ -57,8 +57,6 @@ if __name__ == "__main__":
 
     dataframe = pd.read_csv(cfg.data.test_dataframe_path)
 
-    # trick to make faster (but can be optimized)
-    dataframe["target_path"] = dataframe["image_path"]
     # trick to make cell metric compatible with our cell count analysis
     slide_dataframe = pd.DataFrame()
     slide_dataframe["in_slide_name"] = dataframe["image_path"].apply(lambda x: Path(x).stem).tolist()

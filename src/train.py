@@ -26,7 +26,6 @@ from .dataset import (
     BalancedPositiveSampler,
     get_width_height,
     get_effective_width_height,
-    get_input_mean_std,
 )
 from .metrics import CellMetrics
 from .models import ModelModule, DiscriminatorPatch
@@ -88,7 +87,8 @@ def train_miphei(cfg: DictConfig, logdir: str) -> None:
     log.info("{} width / {} height".format(width, height))
     log.info("{} inputs channels / {} output channels".format(nc_in, nc_out))
 
-    channel_stats_rgb = get_input_mean_std(cfg, channel_stats["RGB"])
+    channel_stats_rgb = {"mean": cfg.data.normalization.mean,
+                         "std": cfg.data.normalization.std}
     preprocess_input_fn = NormalizationLayer(channel_stats_rgb, mode="he")
 
     channel_names = cfg.data.targ_channel_names

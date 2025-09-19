@@ -36,7 +36,7 @@ Run MIPHEI-ViT on H&E tiles & reproduce the results: [<img src="https://colab.re
 ---
 
 ## 🛠️ Project Status
-Last updated: July 2025
+Last updated: September 2025
 
 - ✅ Code cleanup (PEP8 compliance)
 - ✅ Bootstrap analysis integrated in evaluation folder
@@ -44,6 +44,8 @@ Last updated: July 2025
 - ✅ SlideVips updated and optimized (RAM issue fixed)
 - ✅ WSI inference pipeline implemented
 - ✅ Google Colab Notebook Update
+- ✅ Fix normalization issue
+- ✅ Add pixel level metrics in evaluation scripts
 
 **Planned / To Do:**
 - [ ] Refactor preprocessing pipeline for PEP8 compliance  
@@ -107,7 +109,7 @@ Also update the paths inside the dataframes, if needed.
 
   <li>
     <p>
-      The other models used for comparison in the paper—<strong>HEMIT*</strong>, <strong>HEMIT-ORION</strong>, <strong>UNETR H-Optimus-0</strong>, and <strong>U-NET ConvNeXtv2</strong>—are accessible on
+      The other models used for comparison in the paper—<strong>MIPHEI-HEMIT</strong>, <strong>HEMIT-ORION</strong>, <strong>UNETR H-Optimus-0</strong>, and <strong>U-NET ConvNeXtv2</strong>—are accessible on
       <a href="https://wandb.ai/guillaume-balezo/MIPHEI-ViT_paper/artifacts/" target="_blank">
         <img src="https://wandb.ai/logo.svg" alt="Weights & Biases" height="20" style="vertical-align: middle; margin-right: 4px;" />
         Weights & Biases
