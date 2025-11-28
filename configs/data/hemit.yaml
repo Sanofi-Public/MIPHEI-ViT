@@ -1,13 +1,16 @@
 # @package _global_
 
 data:
-  slide_dataframe_path: /root/workdir/hemit/hemit_original/slide_dataframe_hemit.csv
-  train_dataframe_path: /root/workdir/hemit/hemit_original/train_dataframe_hemit.csv
-  val_dataframe_path: /root/workdir/hemit/hemit_original/val_dataframe_hemit.csv
-  test_dataframe_path: /root/workdir/hemit/hemit_original/test_dataframe_hemit.csv
+  slide_dataframe_path: null
+  train_dataframe_path: /root/workdir/new_data/hemit/HEMIT_dataset/train_dataframe_hemit.csv
+  val_dataframe_path: /root/workdir/new_data/hemit/HEMIT_dataset/val_dataframe_hemit.csv
+  test_dataframe_path: /root/workdir/new_data/hemit/HEMIT_dataset/test_dataframe_hemit.csv
+  nuclei_dataframe_path: /root/workdir/new_data/hemit/HEMIT_dataset/nuclei_dataframe.parquet
+  marker_metadata_path: /root/workdir/new_data/hemit/HEMIT_dataset/marker_metadata.csv
   augmentation_dir: null
   channel_stats_path: channel_stats_hemit.json
   targ_channel_names: ["Pan-CK", "CD3", "Dapi"]
+  nuclei_classes: ["Pan-CK_pos", "CD3_pos"]
 
 train:
   epochs: 80

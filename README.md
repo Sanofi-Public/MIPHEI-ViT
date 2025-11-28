@@ -38,11 +38,6 @@ Run MIPHEI-ViT on H&E tiles & reproduce the results: [<img src="https://colab.re
 
 ---
 
-# 🚨🟥 **Benchmark H&E→mIF Models — IMPORTANT NOTICE**
-
-🟥 **Evaluation, training, and figure-generation code will be uploaded before _21 November_.**
-
----
 ## 🛠️ Project Status
 Last updated: September 2025
 

@@ -1,15 +1,152 @@
-"""Implementations of cell metrics for evaluating cell-level predictions."""
-
-from typing import List, Optional
+from typing import Callable, List, Optional, Union
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.dataset as ds
 import torch
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import balanced_accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import average_precision_score, balanced_accuracy_score, f1_score, roc_auc_score
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.preprocessing import StandardScaler
 from torchmetrics import Metric
+
+
+def read_parquet_filtered(path, slide_names=None, columns=None):
+    """
+    Efficiently read a Parquet file or directory.
+    If slide_names is None → load everything.
+    If slide_names is a list/iterable → filter on slide_name.
+    Optionally select only some columns.
+    """
+
+    dataset = ds.dataset(path, format="parquet")
+
+    if slide_names is None:
+        # no filter → full dataset
+        table = dataset.to_table(columns=columns)
+    else:
+        # create Arrow array for filter
+        allowed = pa.array(slide_names)
+        table = dataset.to_table(
+            columns=columns,
+            filter=ds.field("slide_name").isin(allowed)
+        )
+
+    return table.to_pandas()
+
+
+def convert_logreg_sklearn_to_torch(
+    sklearn_logreg: Union[OneVsRestClassifier, LogisticRegression], scaler: StandardScaler,
+    num_markers: int = None) -> torch.nn.Linear:
+    """
+    Convert a trained sklearn OneVsRestClassifier with LogisticRegression estimators to a \
+    PyTorch Linear layer, adjusting weights and biases for feature standardization.
+
+    This function extracts the weights and biases from each LogisticRegression estimator in the
+    OneVsRestClassifier, adjusts them to account for the standardization applied by the provided
+    StandardScaler, and constructs a PyTorch Linear layer with the adjusted parameters.
+
+    Args:
+        sklearn_logreg (OneVsRestClassifier): Trained sklearn OneVsRestClassifier with LogisticRegression
+            estimators.
+        scaler (StandardScaler): Fitted StandardScaler used to standardize the features during
+            training.
+    Returns:
+        torch.nn.Linear: PyTorch Linear layer with weights and biases adjusted for standardization.
+    """
+    means = scaler.mean_
+    stds = scaler.scale_
+    weights = np.vstack([est.coef_.flatten() if hasattr(est, "coef_")
+                            else np.zeros(num_markers)
+                            for est in sklearn_logreg.estimators_])  # avoid constant model error
+    bias = np.hstack([est.intercept_.flatten() if hasattr(est, "intercept_")
+                        else 0. for est in sklearn_logreg.estimators_])
+    # Adjust weights and bias for standardized input
+    adjusted_weights = weights / stds
+    adjusted_bias = bias - np.sum((weights * means / stds), axis=1)
+
+    # Convert to PyTorch Linear layer
+    w = torch.tensor(adjusted_weights, dtype=torch.float32)
+    b = torch.tensor(adjusted_bias, dtype=torch.float32)
+    torch_logreg = torch.nn.Linear(w.shape[0], w.shape[1])
+    torch_logreg.weight.data = w
+    torch_logreg.bias.data = b
+
+    return torch_logreg
+
+
+def train_logistic_regression(
+        train_dataframe: pd.DataFrame,
+        pred_cols: List[str],
+        target_cols: List[str],
+        test_dataframe: Optional[pd.DataFrame] = None,
+        return_metrics: bool = True):
+    """
+    Train logistic regression model for multi-label cell type classification from cell \
+    expressions.
+
+    This method fits a set of logistic regression classifiers (one per marker/target) using the
+    provided training dataframe (containing training mean cell expressions and target cell
+    types). Features are standardized before training. If a test dataframe is provided, metrics
+    are computed on the test set; otherwise, metrics are computed on the training set. The
+    method also converts the trained scikit-learn models into a PyTorch Linear layer with
+    adjusted weights and biases to account for feature standardization.
+    Args:
+        train_dataframe (pd.DataFrame): DataFrame containing training data with feature columns
+            (_pred suffix) and marker columns (_pos suffix).
+        test_dataframe (Optional[pd.DataFrame], optional): DataFrame containing test data.
+            If None, uses training data as test set. Defaults to None.
+        return_metrics (bool, optional): Whether to return evaluation metrics along with the
+            PyTorch layer. Defaults to True.
+    Returns:
+        If `return_metrics` is True:
+            results: List of tuples for each marker/target containing:
+                (marker_target, roc_auc, balanced_accuracy, f1_score)
+        logreg_layer (torch.nn.Linear): PyTorch Linear layer with adjusted weights and biases.
+    """
+    # Prepare training data
+    X_train = train_dataframe[pred_cols].values
+
+    # If test_dataframe is None, use X_train as X_test
+    if test_dataframe is None:
+        X_test = X_train
+        y_test = train_dataframe[target_cols].values
+    else:
+        X_test = test_dataframe[pred_cols].values
+        y_test = test_dataframe[target_cols].values
+
+    # Standardize the features
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    # Convert labels to multi-label format
+    y_train = train_dataframe[target_cols].values
+
+    # Define OneVsRestClassifier with LogisticRegression
+    model = OneVsRestClassifier(LogisticRegression(class_weight="balanced", random_state=42))
+    model.fit(X_train, y_train)
+    if return_metrics:
+        X_test = scaler.transform(X_test)
+        # Predict probabilities and class labels
+        y_proba = model.predict_proba(X_test)
+        y_pred = model.predict(X_test)
+
+        # Evaluate for each marker/target
+        results = []
+        for idx, marker_target in enumerate(target_cols):
+            roc_auc = roc_auc_score(y_test[:, idx], y_proba[:, idx])
+            ap_auc = average_precision_score(y_true=y_test[:, idx], y_score=y_proba[:, idx])
+            balanced_acc = balanced_accuracy_score(y_test[:, idx], y_pred[:, idx])
+            f1 = f1_score(y_test[:, idx], y_pred[:, idx])
+            results.append((marker_target, roc_auc, ap_auc, balanced_acc, f1))
+
+    # Compute adjusted weights and bias
+    logreg_layer = convert_logreg_sklearn_to_torch(model, scaler)
+
+    if return_metrics:
+        return results, logreg_layer
+    else:
+        return logreg_layer
 
 
 class CellMetrics(Metric):
@@ -63,25 +200,25 @@ class CellMetrics(Metric):
             Returns metrics and a PyTorch Linear layer with calibrated weights.
     """
 
-    def __init__(self, slide_dataframe: pd.DataFrame, marker_names: List[str], min_area: int = 20,
-                 **kwargs):
+    def __init__(self, target_csv_path: str, pred_marker_names: List[str],
+                 target_names: List[str], train_test_split_fn: Optional[Callable] = None,
+                 min_area: int = 0, **kwargs):
         super().__init__(dist_sync_on_step=False, compute_on_cpu=True, **kwargs)
-        excluded_markers = ["Hoechst", "Dapi"]
-        filtered_names = [(i, name) for i, name in enumerate(marker_names)
-                          if name not in excluded_markers]
-        self.marker_names = [name for _, name in filtered_names]
-        self.marker_idxs = [idx for idx, _ in filtered_names]
-        self.intensity_prop_col_names = [f"mean_intensity-{idx}"
-                                         for idx in range(len(self.marker_names))]
-        self.slide_names = slide_dataframe["in_slide_name"].tolist()
-        self.csv_path_dict = {}
-        self.marker_cols = [f"{marker_name}_pos" for marker_name in self.marker_names]
-        self.marker_pred_cols = [f"{marker_name}_pred" for marker_name in self.marker_names]
+
+        self.target_csv_path = target_csv_path
+        self.target_names = list(target_names)
+        self.pred_marker_names = list(pred_marker_names)
+        self.slide_names = read_parquet_filtered(
+            self.target_csv_path,
+            columns=["slide_name"])["slide_name"].unique().tolist()
+
+        self.marker_pred_cols = [f"{marker_name}_pred" for marker_name in self.pred_marker_names]
+        if set(self.marker_pred_cols).intersection(set(self.target_names)):
+            raise ValueError("Predicted marker columns and target marker columns overlap.")
+
+        self.train_test_split_fn = train_test_split_fn
         self.min_area = min_area
-        for _, row in slide_dataframe.iterrows():
-            slide_name = row["in_slide_name"]
-            csv_path = row["nuclei_csv_path"]
-            self.csv_path_dict[slide_name] = csv_path
+        for slide_name in self.slide_names:
             self.add_state(f"{slide_name}_cell_id", default=[], dist_reduce_fx="cat")
             self.add_state(f"{slide_name}_sum", default=[], dist_reduce_fx="cat")
             self.add_state(f"{slide_name}_area", default=[], dist_reduce_fx="cat")
@@ -103,12 +240,12 @@ class CellMetrics(Metric):
         Returns:
             None
         """
-        preds = torch.clip(preds[:, self.marker_idxs], -0.9, 0.9).float()
+        preds = torch.clip(preds, -0.9, 0.9).float()
         preds = (preds + 0.9) / 1.8  # Range [-1, 1] -> [0, 1]
 
         nuclei_masks = torch.unsqueeze(nuclei_masks, dim=1).float()
 
-        num_channels = len(self.marker_names)
+        num_channels_pred = len(self.pred_marker_names)
         # Loop over batch because same cell ids can appear from different WSIs
         for idx_batch in range(len(nuclei_masks)):
             nuclei_b = nuclei_masks[idx_batch, 0]  # Shape: [H, W]
@@ -134,9 +271,9 @@ class CellMetrics(Metric):
             # pred_sums: [num_cells, num_channels]
             # https://docs.pytorch.org/docs/stable/generated/torch.Tensor.scatter_add_.html
             pred_sums = torch.zeros(
-                (unique_labels.shape[0], num_channels), dtype=preds.dtype,
+                (unique_labels.shape[0], num_channels_pred), dtype=preds.dtype,
                 device=preds.device).scatter_add_(
-                    0, inverse_indices.unsqueeze(1).expand(-1, num_channels), pred_flat)
+                    0, inverse_indices.unsqueeze(1).expand(-1, num_channels_pred), pred_flat)
 
             # For each unique cell label, count the number of pixels belonging to that cell.
             # region_counts: [num_cells]
@@ -184,14 +321,22 @@ class CellMetrics(Metric):
         metrics = {}
         metrics["auc"] = 0
         metrics["auc_logreg"] = 0
+        metrics["ap_logreg"] = 0
         metrics["balanced_acc"] = 0
         metrics["f1"] = 0
         train_logreg = logreg_layer is None
         if train_logreg:
-            logreg_layer = self.train_logistic_regression(dataframe, return_metrics=False)
+            if self.train_test_split_fn is not None:
+                train_df, test_df = self.train_test_split_fn(dataframe)
+            else:
+                train_df = test_df = dataframe
+            logreg_layer = self.train_logistic_regression(
+                train_dataframe=train_df,
+                test_dataframe=test_df,
+                return_metrics=False)
 
         preds = dataframe[self.marker_pred_cols].to_numpy()
-        targets = dataframe[self.marker_cols].to_numpy()
+        targets = dataframe[self.target_names].to_numpy()
         with torch.inference_mode():
             logreg_device = next(logreg_layer.parameters()).device
             with torch.amp.autocast(str(self.device), dtype=self.dtype):
@@ -201,7 +346,7 @@ class CellMetrics(Metric):
         logreg_probs = logreg_probs.cpu().numpy()
         logreg_preds = logreg_preds.cpu().numpy()
 
-        for idx_marker, marker_col in enumerate(self.marker_cols):
+        for idx_marker, marker_col in enumerate(self.target_names):
             targets_marker = targets[..., idx_marker]
             preds_marker = preds[..., idx_marker]
             logreg_probs_marker = logreg_probs[..., idx_marker]
@@ -209,29 +354,37 @@ class CellMetrics(Metric):
             if (len(targets) == 0) or (len(np.unique(targets)) == 1):
                 continue
             auc = torch.tensor(
-                roc_auc_score(y_true=targets_marker, y_score=preds_marker), dtype=torch.float32)
+                roc_auc_score(y_true=targets_marker, y_score=preds_marker),
+                dtype=torch.float32)
             auc_logreg = torch.tensor(
                 roc_auc_score(y_true=targets_marker, y_score=logreg_probs_marker),
+                dtype=torch.float32)
+            ap_logreg = torch.tensor(
+                average_precision_score(y_true=targets_marker, y_score=logreg_probs_marker),
                 dtype=torch.float32)
             balanced_acc = torch.tensor(
                 balanced_accuracy_score(y_true=targets_marker, y_pred=logreg_preds_marker),
                 dtype=torch.float32)
-            f1 = torch.tensor(f1_score(y_true=targets_marker, y_pred=logreg_preds_marker),
-                              dtype=torch.float32)
+            f1 = torch.tensor(
+                f1_score(y_true=targets_marker, y_pred=logreg_preds_marker),
+                dtype=torch.float32)
 
             metrics[f"{marker_col}_auc"] = auc
             metrics[f"{marker_col}_auc_logreg"] = auc_logreg
+            metrics[f"{marker_col}_ap_logreg"] = ap_logreg
             metrics[f"{marker_col}_balanced_acc"] = balanced_acc
             metrics[f"{marker_col}_f1"] = f1
             metrics["auc"] += auc
             metrics["auc_logreg"] += auc_logreg
+            metrics["ap_logreg"] += ap_logreg
             metrics["balanced_acc"] += balanced_acc
             metrics["f1"] += f1
 
-        metrics["auc"] /= len(self.marker_names)
-        metrics["auc_logreg"] /= len(self.marker_names)
-        metrics["balanced_acc"] /= len(self.marker_names)
-        metrics["f1"] /= len(self.marker_names)
+        metrics["auc"] /= len(self.target_names)
+        metrics["auc_logreg"] /= len(self.target_names)
+        metrics["ap_logreg"] /= len(self.target_names)
+        metrics["balanced_acc"] /= len(self.target_names)
+        metrics["f1"] /= len(self.target_names)
         metrics["state_dict"] = logreg_layer.state_dict()
         self.reset()
         if return_dataframe:
@@ -259,7 +412,7 @@ class CellMetrics(Metric):
         for slide_name in self.slide_names:
             dataframe_slide = pd.DataFrame()
             cell_ids = self.metric_state[f"{slide_name}_cell_id"]
-            if len(cell_ids) == 0:
+            if len(cell_ids) == 0:  # skip if no cells
                 continue
             cell_ids = torch.hstack(cell_ids).numpy()  # dim_zero_cat
             sums = torch.vstack(self.metric_state[f"{slide_name}_sum"]).numpy()
@@ -267,17 +420,21 @@ class CellMetrics(Metric):
             dataframe_slide["cell_id"] = np.uint64(cell_ids)
             dataframe_slide[self.marker_pred_cols] = sums
             dataframe_slide["area"] = areas
-            columns_groupby = list(dataframe_slide.columns)
-            columns_groupby.remove('cell_id')
+            columns_groupby = [col for col in dataframe_slide.columns if col != "cell_id"]
+            # average intensities per cell label if cell appears multiple times
             dataframe_slide = dataframe_slide.groupby('cell_id')[
                 columns_groupby].sum().reset_index(drop=False)
             dataframe_slide = dataframe_slide[dataframe_slide['area'] > self.min_area]
             dataframe_slide[self.marker_pred_cols] = dataframe_slide[
                 self.marker_pred_cols].astype(np.float32).div(
                     dataframe_slide["area"], axis=0)
+
             dataframe_slide["slide_name"] = pd.Categorical([slide_name] * len(dataframe_slide))
             dataframe.append(dataframe_slide)
+
         dataframe = pd.concat(dataframe, ignore_index=True)
+        # reduce RAM usage
+        dataframe["slide_name"] = dataframe["slide_name"].astype("category")
         return dataframe
 
     def get_dataframe_cell_target(self, slide_names: Optional[List[str]] = None) -> pd.DataFrame:
@@ -293,19 +450,12 @@ class CellMetrics(Metric):
             pandas.DataFrame: Concatenated DataFrame containing cell-level target data for the
                 specified slides, including 'label' (cell id), marker columns, and 'slide_name'.
         """
-        usecols = ["label"] + self.marker_cols
+        usecols = ["label", "slide_name"] + self.target_names
 
-        dataframe_target = []
         if slide_names is None:
             slide_names = self.slide_names
-        for slide_name in slide_names:
-            csv_path = self.csv_path_dict[slide_name]
-            dataframe_slide_target = pd.read_csv(csv_path, engine="pyarrow", usecols=usecols)
-            dataframe_slide_target["slide_name"] = pd.Categorical(
-                [slide_name] * len(dataframe_slide_target))
-            dataframe_target.append(dataframe_slide_target)
-
-        dataframe_target = pd.concat(dataframe_target, ignore_index=True)
+        dataframe_target = read_parquet_filtered(
+            self.target_csv_path, slide_names=slide_names, columns=usecols)
         return dataframe_target
 
     def get_dataframe_cell_pred_target(self) -> pd.DataFrame:
@@ -321,99 +471,26 @@ class CellMetrics(Metric):
         """
         dataframe = self.get_dataframe_cell_pred()
         dataframe_target = self.get_dataframe_cell_target(
-            slide_names=dataframe["slide_name"].unique())
+            slide_names=dataframe["slide_name"].unique().tolist())
 
         dataframe = dataframe.merge(
             dataframe_target, left_on=["slide_name", "cell_id"],
             right_on=["slide_name", "label"], how="left")
 
-        dataframe = dataframe[~dataframe["label"].isna()]
+        dataframe = dataframe[~dataframe["label"].isna()]  # discard if not in ground truth
         dataframe = dataframe.drop(columns=["area", "label"])
-        dataframe[self.marker_cols].astype(bool).fillna(False, inplace=True)
-        dataframe[self.marker_cols] = dataframe[self.marker_cols].astype(bool)
+        dataframe[self.target_names].astype(bool).fillna(False, inplace=True)
+        dataframe[self.target_names] = dataframe[self.target_names].astype(bool)
         return dataframe
 
-    def train_logistic_regression(self, train_dataframe: pd.DataFrame,
-                                  test_dataframe: Optional[pd.DataFrame] = None,
-                                  return_metrics: bool = True):
-        """
-        Train logistic regression model for multi-label cell type classification from cell \
-        expressions.
-
-        This method fits a set of logistic regression classifiers (one per marker/target) using the
-        provided training dataframe (containing training mean cell expressions and target cell
-        types). Features are standardized before training. If a test dataframe is provided, metrics
-        are computed on the test set; otherwise, metrics are computed on the training set. The
-        method also converts the trained scikit-learn models into a PyTorch Linear layer with
-        adjusted weights and biases to account for feature standardization.
-        Args:
-            train_dataframe (pd.DataFrame): DataFrame containing training data with feature columns
-                (_pred suffix) and marker columns (_pos suffix).
-            test_dataframe (Optional[pd.DataFrame], optional): DataFrame containing test data.
-                If None, uses training data as test set. Defaults to None.
-            return_metrics (bool, optional): Whether to return evaluation metrics along with the
-                PyTorch layer. Defaults to True.
-        Returns:
-            If `return_metrics` is True:
-                results: List of tuples for each marker/target containing:
-                    (marker_target, roc_auc, balanced_accuracy, f1_score)
-            logreg_layer (torch.nn.Linear): PyTorch Linear layer with adjusted weights and biases.
-        """
-        # Prepare training data
-        X_train = train_dataframe[self.marker_pred_cols].values
-
-        # If test_dataframe is None, use X_train as X_test
-        if test_dataframe is None:
-            X_test = X_train
-            y_test = train_dataframe[self.marker_cols].values
-        else:
-            X_test = test_dataframe[self.marker_pred_cols].values
-            y_test = test_dataframe[self.marker_cols].values
-
-        # Standardize the features
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-
-        # Convert labels to multi-label format
-        y_train = train_dataframe[self.marker_cols].values
-
-        # Define OneVsRestClassifier with LogisticRegression
-        model = OneVsRestClassifier(LogisticRegression(class_weight="balanced", random_state=42))
-        model.fit(X_train, y_train)
-        if return_metrics:
-            X_test = scaler.transform(X_test)
-            # Predict probabilities and class labels
-            y_proba = model.predict_proba(X_test)
-            y_pred = model.predict(X_test)
-
-            # Evaluate for each marker/target
-            results = []
-            for idx, marker_target in enumerate(self.marker_cols):
-                roc_auc = roc_auc_score(y_test[:, idx], y_proba[:, idx])
-                balanced_acc = balanced_accuracy_score(y_test[:, idx], y_pred[:, idx])
-                f1 = f1_score(y_test[:, idx], y_pred[:, idx])
-                results.append((marker_target, roc_auc, balanced_acc, f1))
-
-        # Compute adjusted weights and bias
-        means = scaler.mean_
-        stds = scaler.scale_
-        weights = np.vstack([est.coef_.flatten() if hasattr(est, "coef_")
-                             else np.zeros(len(self.marker_cols))
-                             for est in model.estimators_])  # avoid constant model error
-        bias = np.hstack([est.intercept_.flatten() if hasattr(est, "intercept_")
-                          else 0. for est in model.estimators_])
-        # Adjust weights and bias for standardized input
-        adjusted_weights = weights / stds
-        adjusted_bias = bias - np.sum((weights * means / stds), axis=1)
-
-        # Convert to PyTorch Linear layer
-        w = torch.tensor(adjusted_weights, dtype=torch.float32)
-        b = torch.tensor(adjusted_bias, dtype=torch.float32)
-        logreg_layer = torch.nn.Linear(w.shape[0], w.shape[1])
-        logreg_layer.weight.data = w
-        logreg_layer.bias.data = b
-
-        if return_metrics:
-            return results, logreg_layer
-        else:
-            return logreg_layer
+    def train_logistic_regression(
+            self, train_dataframe: pd.DataFrame,
+            test_dataframe: Optional[pd.DataFrame] = None,
+            return_metrics: bool = True):
+        return train_logistic_regression(
+            train_dataframe=train_dataframe,
+            test_dataframe=test_dataframe,
+            pred_cols=self.marker_pred_cols,
+            target_cols=self.target_names,
+            return_metrics=return_metrics
+        )

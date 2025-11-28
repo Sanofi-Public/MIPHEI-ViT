@@ -1,0 +1,19 @@
+# @package _global_
+
+data:
+  slide_dataframe_path: /root/workdir/new_data/lizard/lizard/slide_dataframe.csv
+  train_dataframe_path: null
+  val_dataframe_path: null
+  test_dataframe_path: /root/workdir/new_data/lizard/lizard/dataframe.csv
+  augmentation_dir: null
+  channel_stats_path: null
+  targ_channel_names: null
+  nuclei_dataframe_path: /root/workdir/new_data/lizard/lizard/nuclei_dataframe.parquet
+  nuclei_classes: [
+    "Neutrophil",
+    "Epithelial",
+    "Lymphocyte",
+    "Plasma",
+    "Eosinophil",
+    "Connective_tissue"
+  ]

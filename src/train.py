@@ -139,7 +139,11 @@ def train_miphei(cfg: DictConfig, logdir: str) -> None:
     log.info("PatchGAN training")
 
     if cfg.train.use_cell_metrics:
-        cell_metrics = CellMetrics(slide_dataframe, channel_names)
+        cell_metrics = CellMetrics(
+            target_csv_path=cfg.data.nuclei_dataframe_path,
+            pred_marker_names=cfg.data.targ_channel_names,
+            target_names=cfg.data.nuclei_classes,
+            min_area=10)
     else:
         cell_metrics = None
 

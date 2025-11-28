@@ -1,16 +1,23 @@
 # @package _global_
 
 data:
-  slide_dataframe_path: /root/workdir/data/slide_dataframe.csv
-  train_dataframe_path: /root/workdir/data/train_dataframe.csv
-  val_dataframe_path: /root/workdir/data/val_dataframe.csv
-  test_dataframe_path: /root/workdir/data/test_dataframe.csv
+  slide_dataframe_path: /root/workdir/new_data/orion/ORIONCRC_dataset_tile_20x/slide_dataframe.csv
+  train_dataframe_path: /root/workdir/new_data/orion/ORIONCRC_dataset_tile_20x/train_dataframe.csv
+  val_dataframe_path: /root/workdir/new_data/orion/ORIONCRC_dataset_tile_20x/val_dataframe.csv
+  test_dataframe_path: /root/workdir/new_data/orion/ORIONCRC_dataset_tile_20x/test_dataframe.csv
+  nuclei_dataframe_path: /root/workdir/new_data/orion/ORIONCRC_dataset_tile_20x/val_test_nuclei_dataframe.parquet
+  marker_metadata_path: /root/workdir/new_data/orion/ORIONCRC_dataset_tile_20x/marker_metadata.csv
   augmentation_dir: null
   channel_stats_path: channel_stats.json
   targ_channel_names: [
     "Hoechst", "CD31", "CD45", "CD68", "CD4", "FOXP3", "CD8a",
     "CD45RO", "CD20", "PD-L1", "CD3e", "CD163", "E-cadherin",
     "Ki67", "Pan-CK", "SMA"]
+  nuclei_classes: [
+    "CD31_pos", "CD45_pos", "CD68_pos", "CD4_pos", "FOXP3_pos", "CD8a_pos",
+    "CD45RO_pos", "CD20_pos", "PD-L1_pos", "CD3e_pos", "CD163_pos", "E-cadherin_pos",
+    "Ki67_pos", "Pan-CK_pos", "SMA_pos"
+  ]
 
 train:
   epochs: 20

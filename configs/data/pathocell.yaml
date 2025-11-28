@@ -1,0 +1,28 @@
+# @package _global_
+
+data:
+  slide_dataframe_path: /root/workdir/new_data/pathocell/pathocell/slide_dataframe.csv
+  train_dataframe_path: null
+  val_dataframe_path: null
+  test_dataframe_path: /root/workdir/new_data/pathocell/pathocell/dataframe.csv
+  nuclei_dataframe_path: /root/workdir/new_data/pathocell/pathocell/cell_dataframe.parquet
+  marker_metadata_path: /root/workdir/new_data/pathocell/pathocell/marker_metadata.csv
+  augmentation_dir: null
+  channel_stats_path: null
+  targ_channel_names: [
+    "CD44", "FOXP3", "CDX2", "CD8a", "p53", "GATA3", "CD45",
+    "T-bet", "beta-catenin", "HLA-DR", "PD-L1", "Ki67", "CD45RA",
+    "CD4", "CD21", "MUC-1", "CD30", "CD2", "Vimentin", "CD20",
+    "LAG-3", "Na-K-ATPase", "CD5", "IDO-1", "Cytokeratin", "CD11b",
+    "CD56", "SMA", "BCL-2", "CD25", "Collagen IV", "CD11c", "PD-1",
+    "HOCHST13", "Granzyme B", "EGFR", "VISTA", "CD15", "CD194",
+    "ICOS", "MMP9", "Synaptophysin", "CD71", "GFAP", "CD7", "CD3e",
+    "Chromogranin A", "CD163", "CD57", "CD45RO", "CD68", "CD31",
+    "Podoplanin", "CD34", "CD38", "CD138", "MMP12", "DRAQ5",
+  ]
+  idxs_orion_map: [57, 51, 6, 50, 13, 1, 3, 49, 19, 10, 45, 47, 8, 11, 24, 27]
+  nuclei_classes: [
+    'Background', 'B cells', 'Macrophages/Monocytes', 'Adipocytes',
+    'Dendritic cells', 'T cells', 'Granulocytes', 'NK cells', 'Nerves',
+    'Plasma cells', 'Smooth muscle', 'Stroma', 'Tumor cells',
+    'Vasculature/Lymphatics', 'Other cells']

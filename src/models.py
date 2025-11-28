@@ -121,7 +121,7 @@ class ModelModule(pl.LightningModule):
         self.cell_loss = cell_loss
         if self.use_cell_metrics:
             self.logreg_layer = nn.Linear(
-                len(self.cell_metrics.marker_pred_cols), len(self.cell_metrics.marker_cols))
+                len(self.cell_metrics.pred_marker_names), len(self.cell_metrics.target_names))
             if self.cell_loss is not None:
                 self.mean_cell_extractor = MeanCellExtrator()
 
@@ -392,7 +392,7 @@ class ModelModule(pl.LightningModule):
         self._log_val_metric(f"{prefix}_cell_auc_logreg", cell_metrics["auc_logreg"])
         self._log_val_metric(f"{prefix}_cell_balanced_acc", cell_metrics["balanced_acc"])
         self._log_val_metric(f"{prefix}_cell_f1", cell_metrics["f1"])
-        for marker_col in self.cell_metrics.marker_cols:
+        for marker_col in self.cell_metrics.target_names:
             self._log_val_metric(f"{prefix}_cell_auc_{marker_col}",
                                  cell_metrics[f"{marker_col}_auc"])
             self._log_val_metric(f"{prefix}_cell_auc_logreg_{marker_col}",
