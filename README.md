@@ -8,15 +8,6 @@
   <a href="https://arxiv.org/abs/2505.10294" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
     <img src="https://img.shields.io/badge/arXiv-Paper-red?logo=arxiv" height="25">
   </a>
-  <a href="https://github.com/Sanofi-Public/MIPHEI-ViT" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
-    <img src="https://img.shields.io/badge/GitHub-Code-black?logo=github" height="25">
-  </a>
-  <a href="https://huggingface.co/Estabousi/MIPHEI-vit" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
-    <img src="https://img.shields.io/badge/HuggingFace-Model-yellow?logo=huggingface" height="25">
-  </a>
-  <a href="https://huggingface.co/spaces/Estabousi/MIPHEI-vit-demo" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
-    <img src="https://img.shields.io/badge/Gradio-Demo-yellow?logo=gradio" height="25">
-  </a>
   <a href="https://zenodo.org/records/15340874" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
     <img src="https://img.shields.io/badge/Zenodo-Dataset-blue?logo=zenodo" height="25">
   </a>
@@ -39,8 +30,11 @@ Run MIPHEI-ViT on H&E tiles & reproduce the results: [<img src="https://colab.re
 ---
 
 ## 🛠️ Project Status
-Last updated: September 2025
+Last updated: December 2025
 
+- ✅ Benchmark Update on OrionCRC, HEMIT, PathoCell, Lizard, PanNuke (December)
+- ✅ Data Download Scripts (December)
+- ✅ ROSIE and DiffusionFT comparision (December)
 - ✅ Code cleanup (PEP8 compliance)
 - ✅ Bootstrap analysis integrated in evaluation folder
 - ✅ Correction of H&E normalization for MIPHEI checkpoint
@@ -74,23 +68,28 @@ We recommend using **Conda**, as it simplifies the installation of certain depen
 
 ## 📁 Data Download
 
-We provide processed and cleaned data derived from the **Orion CRC** and **HEMIT** datasets. **IMMUCAN** data is not yet released due to ongoing privacy restrictions.
+We provide several processed datasets used in our H&E → mIF prediction experiments and cell-level evaluations.
 
-You can download the full dataset from Zenodo:
+All **preprocessed versions of OrionCRC and HEMIT** are publicly available on Zenodo:
 
-🔗 https://doi.org/10.5281/zenodo.15340874
+🔗 Zenodo archive: https://doi.org/10.5281/zenodo.15340874
 
-- **Orion**: Fully included in the Zenodo archive.
-- **HEMIT**: Supplementary data only (e.g., cell segmentations, inferred cell types).
-    - You must download the **original HEMIT dataset** separately from [here](https://data.mendeley.com/datasets/3gx53zm49d/1).
-    - Then, run `preprocessings/hemit_preprocessing.ipynb` to **merge it with our annotations** and generate required dataframes. You can also regenerate the additional data from this notebook
+### Included in the Zenodo package:
+- **OrionCRC**: Fully preprocessed (H&E and mIF tiles, cell segmentations and cell types).
+- **HEMIT**: Preprocessed supplementary data (cell segmentations and cell types).
 
-After downloading the data, update paths in the following config files:
+### Additional supported datasets
+Our framework also supports several external datasets used for mIF benchmarking at pixel and cell-level:
 
-- `configs/orion.yaml, configs/hemit.yaml`
-    - Make sure to set: `slide_dataframe_path, train_dataframe_path, val_dataframe_path, test_dataframe_path, augmentation_dir` (optional; CycleGAN-augmented tiles)*,* `channel_stats_path`, `targ_channel_names`
+- **H&E + mIF datasets**
+    - **OrionCRC**
+    - **HEMIT**
+    - **PathoCell**
+- **H&E panoptic/cell segmentation datasets** (evaluation only)
+    - **Lizard**
+    - **PanNuke**
 
-Also update the paths inside the dataframes, if needed.
+Instructions for automatically downloading all datasets, as well as adding your own custom dataset, are available in `datasets/README.md`.
 
 ---
 
@@ -103,7 +102,7 @@ Also update the paths inside the dataframes, if needed.
 
 <ul>
   <li>
-    The MIPHEI-ViT model weights can be downloaded from
+    The MIPHEI-ViT model weights can be downloaded from the release. You can also visit MIPHEI-ViT card on
     <a href="https://huggingface.co/Estabousi/MIPHEI-vit" target="_blank">
       <img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" alt="Hugging Face" height="24" style="vertical-align: middle;" />
       Hugging Face
@@ -184,39 +183,30 @@ If you want to try the model on your own H&E images:
 
 ---
 
-## Evaluation
+## Benchmark
 
-You can reproduce the evaluation results reported in the paper on the **ORION** and **HEMIT** datasets using the following scripts inside `evaluations` folder:
+You can run evaluation (pixel-level, cell-level, efficiency, visualizations) in the `benchmark/` folder on the **OrionCRC**, **HEMIT**, **PathoCell**, **Lizard**, **PanNuke** datasets. See `benchmark/README.md` for usage and examples.
 
 - **ORION**:
     
     ```bash
-    python eval_orion.py --checkpoint_dir path/to/model
+    python run_benchmark.py --checkpoint_dir path/to/model --dataset orion -- model model_type
     ```
     
 - **HEMIT**:
     
     ```bash
-    python eval_hemit.py --checkpoint_dir path/to/model
+     python run_benchmark.py --checkpoint_dir path/to/model --dataset hemit -- model model_type
     ```
     
-- **IMMUCAN** *(not publicly available)*:
-    
-    The script `evaluations/eval_immucan.py` was used to evaluate on the IMMUCAN dataset, but the data is not included due to access restrictions.
-    
+**IMMUCAN** *is not yet publicly available*
 
-We also provide evaluation scripts — `evaluations/eval_orion_hemit.py` and `evaluations/eval_hemit_hemit.py` — to evaluate models trained using the original **HEMIT codebase**, including:
 
-- the **official HEMIT checkpoint**
-- **HEMIT-ORION**: a model trained on the ORION dataset using the HEMIT codebase
-
-The `hemit/` folder contains the modified training and preprocessing scripts used to train **HEMIT-ORION** on the original HEMIT codebase.
-
-All figures from the paper can be reproduced using the notebooks in the `figure/` directory.
+All figures from the paper can be reproduced using the notebooks in the figure/ directory.
 
 <p align="center">
   <strong>Figure: Example of mIF prediction from H&E on 3 datasets</strong><br>
-  <img src="figures/prediction_vis.png" alt="Prediction Example" width="500px">
+  <img src="benchmark/visualizations/full_results.png" alt="Benchmark Results" width="1000px">
 </p>
 
 ---
