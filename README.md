@@ -102,11 +102,7 @@ Instructions for automatically downloading all datasets, as well as adding your 
 
 <ul>
   <li>
-    The MIPHEI-ViT model weights can be downloaded from the release. You can also visit MIPHEI-ViT card on
-    <a href="https://huggingface.co/Estabousi/MIPHEI-vit" target="_blank">
-      <img src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg" alt="Hugging Face" height="24" style="vertical-align: middle;" />
-      Hugging Face
-    </a>.
+    The MIPHEI-ViT model weights can be downloaded from the release.
   </li>
 
   <li>
@@ -124,17 +120,17 @@ Instructions for automatically downloading all datasets, as well as adding your 
   </li>
 </ul>
 
-To automatically download all model checkpoints into the `checkpoints/` folder, run in the `evaluation/` folder:
+To automatically download all model checkpoints into the `checkpoints/` folder, run:
 
 ```bash
-python download_checkpoints.py
+python scripts/download_checkpoints.py
 ```
 
 Each model is organized in a folder containing:
 
 - the model checkpoint (`.ckpt` or `.safetensors`)
 - a `config.yaml` file with training and architecture parameters
-- `.csv` files with evaluation results for the 3 datasets
+- `.parquet` and `.csv` files with evaluation results for the 3 datasets
 
 ---
 

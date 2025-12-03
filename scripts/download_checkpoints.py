@@ -72,6 +72,7 @@ if __name__ == "__main__":
     run = wandb.init()
 
     models = [
+        ("MIPHEI-vit", "guillaume-balezo/MIPHEI-ViT_paper/MIPHEI-vit:v0"),
         ("UNETR-hoptimus", "guillaume-balezo/MIPHEI-ViT_paper/UNETR-hoptimus:v0"),
         ("MIPHEI_HEMIT", "guillaume-balezo/MIPHEI-ViT_paper/MIPHEI_HEMIT:v0"),
         ("HEMIT-ORION_original", "guillaume-balezo/MIPHEI-ViT_paper/HEMIT-ORION_original:v0"),
@@ -99,16 +100,6 @@ if __name__ == "__main__":
     wandb.finish()
     shutil.rmtree("artifacts")  # Clean up the wandb directory
     shutil.rmtree("wandb")  # Clean up the wandb directory
-
-    dest_dir = os.path.join(args.output_dir, "MIPHEI-vit")
-    if not os.path.exists(dest_dir):
-        subprocess.run(
-            ["git", "clone", "https://huggingface.co/Estabousi/MIPHEI-vit", os.path.join(
-                args.output_dir, "MIPHEI-vit")],
-            check=True
-        )
-    else:
-        print(f"MIPHEI-vit already exists in {args.output_dir}, skipping download.")
 
     dest_dir = os.path.join(args.output_dir, "hemit_v1", "hemit_v1.pth")
     if not os.path.exists(dest_dir):
