@@ -5,6 +5,9 @@
 </p>
 
 <p align="center">
+  <a href="https://www.sciencedirect.com/science/article/pii/S0010482526001277" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+    <img src="https://img.shields.io/badge/CBM-Paper-orange?logo=elsevier" height="25">
+  </a>
   <a href="https://arxiv.org/abs/2505.10294" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
     <img src="https://img.shields.io/badge/arXiv-Paper-red?logo=arxiv" height="25">
   </a>
@@ -260,5 +263,14 @@ To reproduce the preprocessing steps for the **ORION** dataset or to apply them 
 
 If you use this work, please cite:
 
-> Balezo, G., Trullo, R., Planas, A., Decenciere, E., & Walter, T. (2025). MIPHEI-ViT: Multiplex Immunofluorescence Prediction from H&E Images using ViT Foundation Models. arXiv preprint arXiv:2505.10294.
->
+```bibtex
+@article{balezo2026miphei,
+  title={MIPHEI-ViT: Multiplex immunofluorescence prediction from H\&E images using ViT foundation models},
+  author={Balezo, Guillaume and Trullo, Roger and Pla Planas, Albert and Decenciere, Etienne and Walter, Thomas},
+  journal={Computers in Biology and Medicine},
+  volume={206},
+  pages={111564},
+  year={2026},
+  doi={10.1016/j.compbiomed.2026.111564}
+}
+```
