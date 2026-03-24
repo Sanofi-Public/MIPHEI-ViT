@@ -50,20 +50,29 @@ def get_locs_otsu(thumbnail_or_mask: np.ndarray, slide_dim: Tuple[int, int],
     tile_positions = []
     tissue_percentages = []
 
-    ys_thumbnail = np.arange(0, thumbnail_shape[1] + 1,
+    # Start tiles at -tile_overlap//2 (one-sided overlap) so that the content
+    # region after discarding borders on both sides is aligned at position 0.
+    # Without this offset, the first content pixel starts at +tile_overlap//2,
+    # which introduces a black band at the borders during WSI reconstruction.
+    tile_half_overlap = tile_overlap // 2
+    scaled_tile_half_overlap = scaled_tile_overlap / 2
+    stride_lvl0 = tile_size_lvl0 - tile_overlap
+
+    ys_thumbnail = np.arange(-scaled_tile_half_overlap[1], thumbnail_shape[1] + 1,
                              scaled_tile_size[1] - scaled_tile_overlap[1])
-    ys = np.arange(0, slide_dim[1] + 1,
-                   tile_size_lvl0 - tile_overlap)
-    xs_thumbnail = np.arange(0, thumbnail_shape[0] + 1,
+    ys = np.arange(-tile_half_overlap, slide_dim[1] + 1, stride_lvl0)
+    xs_thumbnail = np.arange(-scaled_tile_half_overlap[0], thumbnail_shape[0] + 1,
                              scaled_tile_size[0] - scaled_tile_overlap[0])
-    xs = np.arange(0, slide_dim[0] + 1,
-                   tile_size_lvl0 - tile_overlap)
+    xs = np.arange(-tile_half_overlap, slide_dim[0] + 1, stride_lvl0)
 
     for y_thumb, y in zip(ys_thumbnail, ys):
         for x_thumb, x in zip(xs_thumbnail, xs):
-            x_min, y_min = int(x_thumb), int(y_thumb)
-            x_max, y_max = int(x_thumb + scaled_tile_size[0]), int(y_thumb + scaled_tile_size[1])
-            tile = mask[y_min: y_max, x_min: x_max]
+            # Clamp thumbnail coords to valid range (negative when starting before origin)
+            x_min = max(0, int(x_thumb))
+            y_min = max(0, int(y_thumb))
+            x_max = min(int(x_thumb + scaled_tile_size[0]), mask.shape[1])
+            y_max = min(int(y_thumb + scaled_tile_size[1]), mask.shape[0])
+            tile = mask[y_min:y_max, x_min:x_max]
             if tile.size == 0:
                 continue
             mask_percentage = np.count_nonzero(tile) / tile.size

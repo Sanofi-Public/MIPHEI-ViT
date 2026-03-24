@@ -29,11 +29,10 @@ cd "$DATA_DIR/HEMIT_dataset"
 # ---------------------------------------
 # Download original HEMIT dataset
 # ---------------------------------------
-aria2c -x 16 -s 16 -k 10M \
-  -o HEMIT_raw.zip \
-  "https://prod-dcd-datasets-cache-zipfiles.s3.eu-west-1.amazonaws.com/3gx53zm49d-1.zip" && \
-    unzip -q HEMIT_raw.zip && \
-    rm HEMIT_raw.zip
+wget -O HEMIT_raw.zip \
+  "https://data.mendeley.com/public-api/zip/3gx53zm49d/download/1" && \
+unzip -q HEMIT_raw.zip && \
+rm HEMIT_raw.zip
 
 # Extract the .7z inside the extracted folder
 7z x "HEMIT H&E to Multiplex-immunohistochemistry Image Translation with Dual-Branch Pix2pix Generator/HEMIT.7z" && \
@@ -42,8 +41,7 @@ aria2c -x 16 -s 16 -k 10M \
 # ---------------------------------------
 # Download nuclei analysis supplementary
 # ---------------------------------------
-aria2c -x 16 -s 16 -k 10M \
-  -o HEMIT_nuclei_analysis.zip \
+wget -O HEMIT_nuclei_analysis.zip \
   "https://zenodo.org/records/15340874/files/HEMIT_nuclei_analysis.zip?download=1" && \
     unzip -q HEMIT_nuclei_analysis.zip && \
     rm HEMIT_nuclei_analysis.zip

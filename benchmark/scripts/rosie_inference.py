@@ -34,7 +34,10 @@ class RosieInference(BaseInference):
 
     def __init__(self, patch_size=128, stide=8, *args, **kwargs):
         self.patch_size = patch_size
+        assert self.patch_size % 2 == 0, "Patch size must be even."
         self.stride = stide
+        pad = patch_size // 2
+        self.padding = (pad, pad, pad, pad)
         super().__init__(*args, **kwargs)
 
     def _load_config(self):
@@ -51,8 +54,11 @@ class RosieInference(BaseInference):
 
     def forward(self, batch):
         """No model is loaded: predictions already exist on disk."""
+        input = batch["image"].to(self.device)
+        input = torch.nn.functional.pad(
+            input, self.padding, mode="constant", value=0)
         out = infer_sliding_window(
-            batch["image"].to(self.device), self.model,
+            input, self.model,
             P=self.patch_size, S=self.stride).numpy()
         out = np.moveaxis(out, 1, -1)
         return out

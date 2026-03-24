@@ -17,6 +17,7 @@ def evaluate(args):
         "checkpoint_dir": args.checkpoint_dir,
         "config_dir": args.config_dir,
         "min_area": args.min_area,
+        "save_logreg": args.save_logreg
     }
     if args.batch_size is not None:
         kwargs["batch_size"] = args.batch_size

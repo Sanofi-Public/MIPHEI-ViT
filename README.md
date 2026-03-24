@@ -1,71 +1,85 @@
-# **MIPHEI-vit: Multiplex Immunofluorescence Prediction from H&E Images using ViT Foundation Models**
+# **MIPHEI-ViT: Multiplex Immunofluorescence Prediction from H&E Images using ViT Foundation Models**
 
 <p align="center">
   <img src="MIPHEI_logo.svg" alt="MIPHEI-ViT Logo" style="height:250px;">
 </p>
 
 <p align="center">
-  <a href="https://www.sciencedirect.com/science/article/pii/S0010482526001277" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+  <a href="https://www.sciencedirect.com/science/article/pii/S0010482526001277" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/CBM-Paper-orange?logo=elsevier" height="25">
   </a>
-  <a href="https://arxiv.org/abs/2505.10294" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+  <a href="https://arxiv.org/abs/2505.10294" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/arXiv-Paper-red?logo=arxiv" height="25">
   </a>
-  <a href="https://zenodo.org/records/15340874" target="_blank" rel="noopener noreferrer" style="display: inline-block; vertical-align: middle;">
+  <a href="https://zenodo.org/records/15340874" target="_blank" rel="noopener noreferrer">
     <img src="https://img.shields.io/badge/Zenodo-Dataset-blue?logo=zenodo" height="25">
+  </a>
+  <a href="https://colab.research.google.com/github/Sanofi-Public/MIPHEI-ViT/blob/main/notebooks/colab_inference.ipynb">
+    <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="25">
   </a>
 </p>
 
-This repository supports full **reproducibility** of our paper on predicting **multiplex immunofluorescence (mIF)** from standard **H&E-stained histology images**.  
-It includes all **code**, **pretrained models**, and **preprocessing steps** to replicate our results or apply the approach to new datasets.
+We introduce **MIPHEI-ViT**, a **U-Net-style** architecture that leverages the **H-Optimus-0** ViT foundation model as an encoder to predict multi-channel mIF images from H&E slides. Inspired by ViTMatte, the model combines a hybrid transformer–convolutional encoder with a convolutional decoder.
 
-We introduce **MIPHEI-vit**, a **U-Net-style model** using **H-Optimus-0**, a ViT foundation model, as its encoder to predict **multi-channel mIF images** from H&E slides.  
-Inspired by **ViTMatte**, the architecture combines **transformer-based encoding** with a **convolutional decoder**.
-
-Paired with **CellPose** for nuclei segmentation, MIPHEI-vit enables **single-cell level cell type prediction** directly from H&E.
-
-We cover key markers from the **ORION dataset**, including:  
-**Hoechst**, **CD31**, **CD45**, **CD68**, **CD4**, **FOXP3**, **CD8a**, **CD45RO**, **CD20**, **PD-L1**, **CD3e**, **CD163**, **E-cadherin**, **Ki67**, **Pan-CK**, **SMA**.  
-📊 Performance for each marker is detailed in the paper.
-
-Run MIPHEI-ViT on H&E tiles & reproduce the results: [<img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="25">](https://colab.research.google.com/github/Sanofi-Public/MIPHEI-ViT/blob/main/notebooks/colab_inference.ipynb)
+This repository supports full **reproducibility** of our paper on predicting **multiplex immunofluorescence (mIF)** from standard **H&E-stained histology images**. It includes all **code**, **pretrained models**, and **preprocessing steps** to replicate our results or apply the approach to new datasets.
 
 ---
 
-## 🛠️ Project Status
-Last updated: December 2025
+## 📋 Table of Contents
 
-- ✅ Benchmark Update on OrionCRC, HEMIT, PathoCell, Lizard, PanNuke (December)
-- ✅ Data Download Scripts (December)
-- ✅ ROSIE and DiffusionFT comparision (December)
-- ✅ Code cleanup (PEP8 compliance)
-- ✅ Bootstrap analysis integrated in evaluation folder
-- ✅ Correction of H&E normalization for MIPHEI checkpoint
-- ✅ SlideVips updated and optimized (RAM issue fixed)
-- ✅ WSI inference pipeline implemented
-- ✅ Google Colab Notebook Update
-- ✅ Fix normalization issue
-- ✅ Add pixel level metrics in evaluation scripts
+- [Quick Start](#-quick-start)
+- [Installation](#-installation)
+- [Data Download](#-data-download)
+- [Model Weights](#-model-weights)
+- [Inference](#-inference)
+- [Benchmark](#-benchmark)
+- [Training](#-training)
+- [SlideVips](#-slidevips)
+- [Preprocessing Pipeline](#-preprocessing-pipeline)
+- [Project Status](#-project-status)
+- [Citation](#-citation)
 
-**Planned / To Do:**
-- [ ] Refactor preprocessing pipeline for PEP8 compliance  
- 
+---
+
+## ⚡ Quick Start
+
+```bash
+# 1. Install with conda (or with uv, see below)
+conda env create -f environment.yaml --name miphei && conda activate miphei
+
+# 2. Download MIPHEI-ViT weights
+python scripts/download_miphei.py --out-dir MIPHEI-vit
+
+# 3. Run WSI inference
+python run_wsi_inference.py \
+  --slide_path path/to/slide.svs \
+  --checkpoint_dir MIPHEI-vit \
+  --output_dir predictions/
+```
+
+Or try it directly in Google Colab: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Sanofi-Public/MIPHEI-ViT/blob/main/notebooks/colab_inference.ipynb)
+
 ---
 
 ## 📦 Installation
 
-To get started, you can install the environment with:
-
 ```bash
 conda env create -f environment.yaml --name miphei
 conda activate miphei
-pip install -r requirements_torch.txt
-pip install -r requirements.txt
-pip install -e slidevips-python
-pip install -r requirements_preprocessings.txt  # only if you want to run the preprocessing pipeline
 ```
 
-We recommend using **Conda**, as it simplifies the installation of certain dependencies like `pyvips`, which are not always easy to install via `pip`.
+Or using `uv`:
+
+```bash
+uv venv --python 3.11
+source .venv/bin/activate
+apt-get install -y libvips-dev --no-install-recommends
+uv pip install pyvips==3.1.1 pyarrow==23.0.1
+uv pip install -r requirements.txt
+uv pip install -e slidevips-python/
+```
+
+> Requires Python 3.11 and PyTorch ≥ 2.7 (default: 2.10.0 in `requirements.txt`).
 
 ---
 
@@ -75,74 +89,68 @@ We provide several processed datasets used in our H&E → mIF prediction experim
 
 All **preprocessed versions of OrionCRC and HEMIT** are publicly available on Zenodo:
 
-🔗 Zenodo archive: https://doi.org/10.5281/zenodo.15340874
+🔗 **Zenodo archive:** https://doi.org/10.5281/zenodo.15340874
 
-### Included in the Zenodo package:
-- **OrionCRC**: Fully preprocessed (H&E and mIF tiles, cell segmentations and cell types).
-- **HEMIT**: Preprocessed supplementary data (cell segmentations and cell types).
+| Included | Description |
+|---|---|
+| **OrionCRC** | Fully preprocessed (H&E + mIF tiles, cell segmentations and cell types) |
+| **HEMIT** | Preprocessed supplementary data (cell segmentations and cell types) |
 
 ### Additional supported datasets
-Our framework also supports several external datasets used for mIF benchmarking at pixel and cell-level:
 
-- **H&E + mIF datasets**
-    - **OrionCRC**
-    - **HEMIT**
-    - **PathoCell**
-- **H&E panoptic/cell segmentation datasets** (evaluation only)
-    - **Lizard**
-    - **PanNuke**
+| Dataset | Type | Use |
+|---|---|---|
+| **OrionCRC** | H&E + 16-marker mIF | Pixel-level + cell-level evaluation |
+| **HEMIT** | H&E + 3-marker mIF | Pixel-level + cell-level evaluation |
+| **PathoCell** | H&E + 56-marker mIF | Pixel-level + cell-level evaluation |
+| **Lizard** | H&E + human-annotated cell types | Cell-level evaluation only |
+| **PanNuke** | H&E + human-annotated cell types | Cell-level evaluation only |
 
-Instructions for automatically downloading all datasets, as well as adding your own custom dataset, are available in `datasets/README.md`.
+Instructions for automatically downloading all datasets, as well as adding your own custom dataset, are available in [`datasets/README.md`](datasets/README.md).
 
 ---
 
-## 💾 Model Checkpoints
+## 💾 Model Weights
 
 <p align="center">
-  <strong>Figure: MIPHEI-vit Architecture</strong><br>
-  <img src="figures/figure_architecture.png" alt="Prediction Example" width="500px">
+  <strong>Figure: MIPHEI-ViT Architecture</strong><br>
+  <img src="figures/figure_architecture.png" alt="MIPHEI-ViT Architecture" width="600px">
 </p>
 
-<ul>
-  <li>
-    The MIPHEI-ViT model weights can be downloaded from the release.
-  </li>
+- **MIPHEI-ViT** weights can be downloaded from the GitHub release or via:
 
-  <li>
-    <p>
-      The other models used for comparison in the paper—<strong>MIPHEI-HEMIT</strong>, <strong>HEMIT-ORION</strong>, <strong>UNETR H-Optimus-0</strong>, and <strong>U-NET ConvNeXtv2</strong>—are accessible on
-      <a href="https://wandb.ai/guillaume-balezo/MIPHEI-ViT_paper/artifacts/" target="_blank">
-        <img src="https://wandb.ai/logo.svg" alt="Weights & Biases" height="20" style="vertical-align: middle; margin-right: 4px;" />
-        Weights & Biases
-      </a>.
-    </p>
-  </li>
+```bash
+python scripts/download_miphei.py --out-dir MIPHEI-vit
+```
 
-  <li>
-    You can download original HEMIT checkpoint <a href="https://github.com/BianChang/Pix2pix_DualBranch">here</a>.
-  </li>
-</ul>
+- All comparison models (**MIPHEI-HEMIT**, **HEMIT-ORION**, **UNETR H-Optimus-0**, **U-Net ConvNeXtv2**) are on
+  <a href="https://wandb.ai/guillaume-balezo/MIPHEI-ViT_paper/artifacts/">
+    <img src="https://wandb.ai/logo.svg" alt="Weights & Biases" height="18" style="vertical-align: middle;"> Weights & Biases
+  </a>.
 
-To automatically download all model checkpoints into the `checkpoints/` folder, run:
+- Original HEMIT checkpoint: [github.com/BianChang/Pix2pix_DualBranch](https://github.com/BianChang/Pix2pix_DualBranch)
+
+To download **all** model checkpoints into `checkpoints/`:
 
 ```bash
 python scripts/download_checkpoints.py
 ```
 
-Each model is organized in a folder containing:
-
-- the model checkpoint (`.ckpt` or `.safetensors`)
-- a `config.yaml` file with training and architecture parameters
-- `.parquet` and `.csv` files with evaluation results for the 3 datasets
+Each model folder contains:
+- Model checkpoint (`.ckpt` or `.safetensors`)
+- `config.yaml` with training and architecture parameters
+- `.parquet` and `.csv` files with per-dataset evaluation results
 
 ---
 
-## 🔍 Inference
-
-You can use the pretrained models to run inference on **ORION**, **HEMIT**, or your **own custom H&E images**.
+## ▶️ Inference
 
 ### On Whole Slide Images (WSI)
-To run inference directly on a full-resolution WSI (e.g., .svs, .tiff, .ndpi), use:
+
+<p align="center">
+  <strong>WSI Inference Example (H&E → mIF)</strong><br>
+  <img src="figures/wsi_inference.gif" alt="WSI inference demo" width="900px">
+</p>
 
 ```bash
 python run_wsi_inference.py \
@@ -151,17 +159,31 @@ python run_wsi_inference.py \
   --output_dir path/to/save_predictions
 ```
 
-Additional parameters are available to control tile size, overlap, batch size, and inference magnification.
+Key optional parameters:
 
-See run_wsi_inference.py --help for the full list of options.
+| Parameter | Default | Description |
+|---|---|---|
+| `--tile_size` | 512 | Tile size in pixels |
+| `--tile_overlap` | 20 | Overlap between adjacent tiles (px) |
+| `--batch_size` | 8 | Inference batch size |
+| `--mpp_target` | 0.5 | Target microns-per-pixel |
+| `--level` | 0 | WSI pyramid level |
 
-### On Tiles from ORION/HEMIT data:
+Run `python run_wsi_inference.py --help` for the full list of options. 
 
-To visualize predictions on ORION or HEMIT datasets, use the following notebook:
+The output predictions are saved as **OME-TIFF** files and can be directly visualized in **QuPath**.
 
-- `notebooks/inference_orion_hemit.ipynb`
+> ⚠️ Optional — jemalloc (recommended for multiprocessing):  
+> When using multiple workers (PyTorch `DataLoader`), the default memory allocator may cause memory issues. Using `jemalloc` can improve stability.
+>
+> ```bash
+> sudo apt-get install libjemalloc2
+> LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 python run_wsi_inference.py
+> ```
 
-You can also run this python script:
+> ⚠️ You may have to adjust the `Channel max` values in **QuPath** for optimal visualization of the predicted mIF channels.
+
+### On Tiles (OrionCRC / HEMIT / custom)
 
 ```bash
 python run_inference.py \
@@ -170,74 +192,64 @@ python run_inference.py \
   --batch_size 16
 ```
 
-This will generate a new folder inside`checkpoint_dir` containing **predicted TIFF images** for the entire dataset.
+This generates a folder inside `checkpoint_dir` containing **predicted TIFF images** for the entire dataset.
 
-⚠️ *Note: This can produce large amounts of data depending on dataset size.*
+> ⚠️ This can produce large amounts of data depending on dataset size.
 
-### On your own dataset
+### On Your Own H&E Images
 
-If you want to try the model on your own H&E images:
-
-- Use the notebook: `notebooks/inference.ipynb`
+Use the notebook: `notebooks/inference.ipynb`
 
 ---
 
-## Benchmark
+## 📊 Benchmark
 
-You can run evaluation (pixel-level, cell-level, efficiency, visualizations) in the `benchmark/` folder on the **OrionCRC**, **HEMIT**, **PathoCell**, **Lizard**, **PanNuke** datasets. See `benchmark/README.md` for usage and examples.
-
-- **ORION**:
-    
-    ```bash
-    python run_benchmark.py --checkpoint_dir path/to/model --dataset orion -- model model_type
-    ```
-    
-- **HEMIT**:
-    
-    ```bash
-     python run_benchmark.py --checkpoint_dir path/to/model --dataset hemit -- model model_type
-    ```
-    
-**IMMUCAN** *is not yet publicly available*
-
-
-All figures from the paper can be reproduced using the notebooks in the figure/ directory.
+Evaluate pixel-level, cell-level, efficiency, and visualizations in the `benchmark/` folder.
 
 <p align="center">
-  <strong>Figure: Example of mIF prediction from H&E on 3 datasets</strong><br>
-  <img src="benchmark/visualizations/full_results.png" alt="Benchmark Results" width="1000px">
+  <strong>Figure: Radar Plot Comparison of H&E to mIF Virtual Staining Performance</strong><br>
+  <img src="figures/figure_benchmark.png" alt="Benchmark Results" width="1000px">
 </p>
+
+```bash
+# OrionCRC
+python run_benchmark.py --checkpoint_dir path/to/model --dataset orion --model model_type
+
+# HEMIT
+python run_benchmark.py --checkpoint_dir path/to/model --dataset hemit --model model_type
+```
+
+See [`benchmark/README.md`](benchmark/README.md) for full usage, evaluation, efficiency profiling, radar plots, and figure generation.
 
 ---
 
 ## 🚀 Training
 
-To train **MIPHEI-vit** from scratch on the **ORION** dataset, run:
+Train **MIPHEI-ViT** from scratch on the **OrionCRC** dataset:
 
 ```bash
-python run.py +default_configs=miphei-vit
+python run.py +default_configs=miphei-vit ++data.augmentation_dir=null # or directory to augmentated h&e
 ```
 
-If you **don’t want to use Weights & Biases**, run:
+Without Weights & Biases:
 
 ```bash
-WANDB_MODE=offline python run.py +default_configs=miphei-vit
+WANDB_MODE=offline python run.py +default_configs=miphei-vit 
 ```
 
-You can find the list of available default configurations in `configs/default_configs/`.
-To apply MIPHEI-vit model to your own dataset, create a config file like `own_data.yaml` in `configs/data/` and run
+Available default configs are in `configs/default_configs/`. To train on your own data, create `configs/data/own_data.yaml` and run:
 
 ```bash
 python run.py +default_configs=miphei-vit data=own_data
 ```
 
-You can override any parameter directly via the command line. For example, to set the number of training epochs to 100:
+Override any parameter via the command line:
 
 ```bash
 python run.py +default_configs=miphei-vit ++train.epochs=100
 ```
 
-All experiments from the paper are located in `configs/experiments/`. You can run one of them like this:
+Run all paper experiments:
 
 ```bash
 python run.py -m +experiments/foundation_models='glob(*)'
@@ -247,15 +259,39 @@ python run.py -m +experiments/foundation_models='glob(*)'
 
 ## 🧰 SlideVips
 
-Alongside this code, we developed a high-performance `pyvips`-based tile reader and processing engine for **efficient WSI operations**, supporting both H&E and high-dimensional mIF images. This provides an alternative to tools like OpenSlide, with full support for multi-channel fluorescence.
+<p align="center">
+  <img src="slidevips-python/slidevips_logo.svg" alt="SlideVips Logo" style="height:200px;">
+</p>
 
-You can refer to slidevips-python/README.md
+**SlideVips** is a high-performance `pyvips`-based tile reader and processing engine for **efficient WSI operations**, supporting both H&E and high-dimensional mIF images. It serves as an alternative to OpenSlide with full support for multi-channel fluorescence and OME-TIFF metadata.
+
+See [`slidevips-python/README.md`](slidevips-python/README.md) for the full documentation.
 
 ---
 
 ## 📑 Preprocessing Pipeline
 
-To reproduce the preprocessing steps for the **ORION** dataset or to apply them to your own data, please refer to: `preprocessings/README.md`. It contains detailed instructions on running the full pipeline, including tile extraction, autofluorescence subtraction, artifact removal, cell segmentation, etc.
+To reproduce the preprocessing steps for the **OrionCRC** dataset or to apply them to your own data, refer to [`preprocessings/README.md`](preprocessings/README.md). It covers tile extraction, autofluorescence subtraction, artifact removal, cell segmentation with CellPose/HoverFast, and more.
+
+---
+
+## 🛠️ Project Status
+
+<details>
+<summary>Full changelog (click to expand)</summary>
+
+| Date | Update |
+|---|---|
+| March 2026 | WSI inference overlap and shift fixes; dataset setup fixes; Colab update |
+| December 2025 | Benchmark on OrionCRC, HEMIT, PathoCell, Lizard, PanNuke |
+| December 2025 | Data download scripts; ROSIE and DiffusionFT comparison |
+| December 2025 | Code cleanup (PEP8); bootstrap analysis; H&E normalization fix |
+| Earlier | SlideVips optimized (RAM fix); WSI inference pipeline; Colab notebook; pixel-level metrics |
+
+</details>
+
+**Planned:**
+- [ ] Refactor preprocessing pipeline for PEP8 compliance
 
 ---
 

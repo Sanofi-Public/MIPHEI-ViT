@@ -19,6 +19,14 @@ This folder includes scripts to reproduce the preprocessing pipelines for both t
 
 **Note:** Preprocessing steps can be **time-consuming**, as they are not fully optimized and operate on large-scale whole slide image (WSI) data.
 
+## 📦 Installation
+
+On top of the base environment setup (see [root README](../README.md#-installation)), install benchmark-specific dependencies:
+
+```bash
+pip install -r requirements_preprocessings.txt
+```
+
 ## 📥 Reproduce Dataset preprocessings
 
 ### Hemit:

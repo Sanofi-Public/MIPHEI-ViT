@@ -335,8 +335,8 @@ class CellMetrics(Metric):
                 test_dataframe=test_df,
                 return_metrics=False)
 
-        preds = dataframe[self.marker_pred_cols].to_numpy()
-        targets = dataframe[self.target_names].to_numpy()
+        preds = test_df[self.marker_pred_cols].to_numpy()
+        targets = test_df[self.target_names].to_numpy()
         with torch.inference_mode():
             logreg_device = next(logreg_layer.parameters()).device
             with torch.amp.autocast(str(self.device), dtype=self.dtype):

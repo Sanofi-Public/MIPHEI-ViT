@@ -31,6 +31,7 @@ bash diffusionft/run_ft_ddp.sh
 ```
 
 Dependencies: MIPHEI requirements + `accelerate`.
+Code adapted from https://github.com/VisualComputingInstitute/diffusion-e2e-ft
 
 ---
 
@@ -43,6 +44,7 @@ python rosie/train_orion.py
 ```
 
 Dependencies: MIPHEI requirements.
+Code adapted from https://gitlab.com/enable-medicine-public/rosie
 
 ---
 
@@ -60,7 +62,7 @@ Adapt scripts according to `hemit/diff.txt`, then run:
 bash hemit/train_hemit_orion.sh.
 ```
 
-To evaluate all epochs and select the best checkpoint:
+To evaluate all epochs and select the best checkpoint on validation:
 
 ```bash
 bash hemit/test_all_hemit_orion.sh
@@ -86,7 +88,7 @@ Training script:
 bash pix2pix/train_pix2pix_orion.sh
 ```
 
-Evaluate all epochs:
+To evaluate all epochs and select the best checkpoint on validation:
 
 ```bash
 bash pix2pix/test_all_pix2pix_orion.sh

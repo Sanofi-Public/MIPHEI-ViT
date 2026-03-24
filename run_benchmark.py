@@ -10,6 +10,7 @@ def parse_args():
     parser.add_argument("--model", required=True)
     parser.add_argument("--dataset", required=True)
 
+    parser.add_argument("--save_logreg", action="store_true")
     parser.add_argument("--config_dir", required=False, default="configs")
     parser.add_argument("--pred_dir", required=False, default=None)
     parser.add_argument("--min_area", type=float, default=10)

@@ -1,73 +1,128 @@
 # SlideVips
 
-## Overview
-**SlideVips** is an efficient and powerful Python package designed for reading, processing, and managing whole slide images (WSI). Built on top of the fast **pyvips** library, SlideVips offers memory-efficient operations and integration with **PyTorch** for creating datasets. This makes it an excellent tool for researchers and developers working with multiplex immunofluorescence (mIF) or H&E-stained images in digital pathology.
+<p align="center">
+  <img src="slidevips_logo.svg" alt="SlideVips Logo" style="height:250px;">
+</p>
 
-## Features
+**SlideVips** is an efficient Python package for reading, processing, and managing whole slide images (WSI). Built on top of **pyvips**, SlideVips handles both H&E and high-dimensional multiplex immunofluorescence (mIF) images.
 
-### Core Capabilities
-- **Fast Reading:** Read and process whole slide images efficiently, even for large datasets.
-- **Multiplex Support:** Handle multiplex immunofluorescence (mIF) images and H&E images with ease.
-- **Multi-Channel Reading:** Load specific channels of mIF images as needed.
-- **Multi-Process Operations:** Perform batch tile reading and writing using multiprocessing for enhanced speed.
-- **PyTorch Dataset Integration:** Easily create datasets for machine learning workflows.
+---
 
-### Example Functionality
+## ✨ Features
 
-#### 1. Reading Whole Slide Images
+| Feature | SlideVips | OpenSlide |
+|---|:---:|:---:|
+| H&E WSI reading | ✅ | ✅ |
+| Multi-channel mIF reading | ✅ | ❌ |
+| Parallel tile reading/writing | ✅ | ❌ |
+| PyTorch Dataset integration | ✅ | ❌ |
+| Memory-efficient (pyvips backend) | ✅ | ❌ |
+| Otsu-based tissue tile selection | ✅ | ❌ |
+
+### Core capabilities
+
+- **Fast reading:** Efficiently process large whole slide images using the pyvips backend.
+- **Multiplex support:** Load specific channels from mIF images (e.g., OME-TIFF).
+- **Parallel I/O:** Read and write batches of tiles using multiprocessing.
+- **PyTorch integration:** Drop-in `SlideDataset` for training and inference pipelines.
+- **Tissue selection:** Otsu-based filtering to skip background tiles.
+
+---
+
+## 📦 Installation
+
+**Option 1 — Conda (recommended):**
+
+```bash
+conda install -c conda-forge -y pyvips python=3.11
+pip install -e .  # run inside the slidevips-python/ folder
+```
+
+**Option 2 — pip / uv:**
+
+```bash
+apt-get install -y libvips-dev --no-install-recommends
+pip install pyvips==3.1.1
+pip install -e .
+```
+
+**Optional — jemalloc (strongly recommended for multiprocessing):**
+
+> When using `SlideDataset` with PyTorch `DataLoader` (multiple workers), the default Python memory allocator may cause memory leaks. Using `jemalloc` eliminates this issue.
+
+```bash
+sudo apt-get install libjemalloc2
+# Then run your scripts with:
+LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 python your_script.py
+```
+
+---
+
+## 🚀 Quick Start
+
+```python
+from slidevips import SlideVips
+from slidevips.tiling import get_locs_otsu
+
+# Open slides
+slide_he = SlideVips(slide_path_he, mode="HE")
+slide_if = SlideVips(slide_path_if, mode="IF", channels=[0, 1, 2])
+
+# Get tissue tile positions
+thumbnail = slide_he.get_thumbnail((1000, 1000))
+tile_positions, _ = get_locs_otsu(thumbnail, slide_he.dimensions, (512, 512))
+
+# Read a batch of tiles
+tiles = slide_if.read_regions(tile_positions, level=0, tile_size=(512, 512))
+```
+
+---
+
+## 📖 API Examples
+
+### Reading Slides
+
 ```python
 from slidevips import SlideVips
 
-# Reading a multiplex immunofluorescence (mIF) slide
-slide_if = SlideVips(slide_path_if, mode="IF", channels=[0, 1])  # Read channel 0 and 1
-
-# Reading an H&E slide
+# H&E slide
 slide_he = SlideVips(slide_path_he, mode="HE")
+
+# mIF slide — load only channels 0 and 1
+slide_if = SlideVips(slide_path_if, mode="IF", channels=[0, 1])
 ```
 
-#### 2. Extracting Thumbnails and Tile Positions
+### Tile Extraction
+
 ```python
-from slidevips.tiling import get_locs_otsu
+# Single tile
+tile = slide_if.read_region(position, level, (tile_size_x, tile_size_y))
 
-# Extract a thumbnail
-thumbnail_he = slide_he.get_thumbnail((1000, 1000))
-
-# Perform Otsu tile selection and get tile positions at level 0
-tile_positions, _ = get_locs_otsu(thumbnail_he, slide_he.dimensions, (512, 512))
+# Batch of tiles (parallel)
+tiles = slide_if.read_regions(positions, level, (tile_size_x, tile_size_y))
 ```
 
-#### 3. Tile Extraction
+### Writing Tiles to Disk
+
 ```python
-# Extract a single tile
-tile_if = slide_if.read_region(tile_position, level, (tile_size_x, tile_size_y))
+# Single tile
+slide_if.write_region(folder, position, level, (tile_size_x, tile_size_y), img_format=".tif")
 
-# Extract multiple tiles in parallel
-tiles_if = slide_if.read_regions(tile_positions, level, (tile_size_x, tile_size_y))
+# Batch of tiles (parallel)
+slide_if.write_regions(folder, positions, level, (tile_size_x, tile_size_y), img_format=".tif")
 ```
 
-#### 4. Writing Tiles to Disk
-```python
-# Write a single tile to a specified folder
-slide_if.write_region(folder, tile_position, level, (tile_size_x, tile_size_y), img_format=".tif")
+### PyTorch Dataset
 
-# Write multiple tiles to disk in parallel
-slide_if.write_regions(folder, tile_positions, level, (tile_size_x, tile_size_y), img_format=".tif")
-```
-
-#### 5. Creating PyTorch Datasets
-⚠️ Warning: When using multiprocessing with SlideVips Torch datasets (and pyvips), the default Python memory allocator (malloc) may lead to memory leaks.
-To avoid this issue, we recommend using jemalloc, a more memory-efficient allocator. You can enable it by running your script with: `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 python your_script.py`
 ```python
 from slidevips.torch_datasets import SlideDataset
 import pandas as pd
 
-# Define slide metadata
 slide_dataframe = pd.DataFrame({
     "in_slide_name": ["slide1", "slide2"],
     "in_slide_path": ["path_to_slide1", "path_to_slide2"]
 })
 
-# Define tile metadata
 dataframe = pd.DataFrame({
     "in_slide_name": ["slide1", "slide1", "slide2"],
     "x": [100, 200, 300],
@@ -77,30 +132,15 @@ dataframe = pd.DataFrame({
     "tile_size_y": [256, 256, 256]
 })
 
-# Create a PyTorch dataset
 dataset = SlideDataset(
     slide_dataframe,
     dataframe,
     mode="IF",
     channel_idxs=[0, 1, 2],
-    preprocessing_fn=my_preprocessing_function,  # E.g., normalization
-    spatial_augmentation=my_spatial_augmentation,  # Albumentations augmentations
-    color_augmentation=my_color_augmentation  # Color-specific augmentations
+    preprocessing_fn=my_preprocessing_function,
+    spatial_augmentation=my_spatial_augmentation,
+    color_augmentation=my_color_augmentation
 )
 ```
 
-## Installation
-To install SlideVips, follow these steps:
-
-1. Install **pyvips** and Python 3.11 via Conda:
-   ```bash
-   conda install -c conda-forge -y pyvips python=3.11
-   ```
-2. Install the SlideVips package:
-   ```bash
-   pip install -e .  # Run this inside the package folder
-   ```
-3. (Optional) Install jemalloc to avoid memory issues when using SlideVips with multiprocessing in PyTorch:
-   ```bash
-   sudo apt-get install libjemalloc2
-   ```
+> **Memory note:** Always use `LD_PRELOAD=.../libjemalloc.so.2` when running with multiple DataLoader workers to avoid memory leaks from the pyvips allocator.

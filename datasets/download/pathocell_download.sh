@@ -26,7 +26,7 @@ echo "[PathoCell] Downloading..."
 mkdir -p "$DATA_DIR/pathocell"
 cd "$DATA_DIR/pathocell"
 
-huggingface-cli download \
+hf download \
   Kainmueller-Lab/PathoCell \
   --repo-type dataset \
   --include "pathocell_hdf/**" \

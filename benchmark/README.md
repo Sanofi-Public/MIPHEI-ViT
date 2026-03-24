@@ -1,10 +1,25 @@
 # 🧪 Benchmark Evaluation
 
-This folder contains all scripts and utilities to evaluate H&E → mIF prediction models, run efficiency benchmarks, generate visualizations, and compare models across datasets.
-
-The full benchmark can be executed in a single command, and additional tools are available for inference (ROSIE), efficiency profiling, radar plots, and figure generation.
+This folder contains all scripts and utilities to evaluate H&E → mIF prediction models: pixel-level metrics, cell-level metrics, efficiency profiling, qualitative comparisons, and radar plots.
 
 ---
+
+**Metrics computed per dataset:**
+
+| Metric type | Datasets | Metrics |
+|---|---|---|
+| Pixel-level | OrionCRC, HEMIT, PathoCell | Pearson, PSNR, SSIM (per marker) |
+| Cell-level | OrionCRC, HEMIT, PathoCell, Lizard, PanNuke | Cell AUPRC, F1 Score, ROC AUC |
+
+---
+
+## 📦 Installation
+
+On top of the base environment setup (see [root README](../README.md#-installation)), install benchmark-specific dependencies:
+
+```bash
+pip install -r requirements_benchmark.txt
+```
 
 ## 🚀 Running the Benchmark
 
@@ -21,21 +36,31 @@ python run_benchmark.py \
 
 ### Arguments
 
-- **`-checkpoint_dir`**: Folder containing the model weights + its config file.
-- **`-model`**: Model name (must match one of the evaluator name in `evaluators/model_evaluators`).
-- **`-dataset`**: Dataset name (must match one of the evaluator name in `evaluators/dataset_evaluators`).
-- **`-config_dir`**: Path to dataset config directory (typically `config/data/` in the root repo).
-- **`-min_area`**: Minimum nuclei area (default: 0 → disables filtering, set to 10 for OrionCRC).
+| Argument | Description |
+|---|---|
+| `--checkpoint_dir` | Folder containing model weights + config file |
+| `--model` | Model name (must match an evaluator in `evaluators/model_evaluators/`) |
+| `--dataset` | Dataset name (must match an evaluator in `evaluators/dataset_evaluators/`) |
+| `--config_dir` | Path to dataset config directory (typically `config/data/`) |
+| `--min_area` | Minimum nucleus area filter (default: `0`; set to `10` for OrionCRC) |
 
 The evaluator automatically determines which metrics apply (pixel-level, cell-level, marker-level, etc.).
 
-### Running ROSIE (slow models)
+### Running All Evaluations (all models × all datasets)
 
-ROSIE inference is significantly slower than all other methods.
+```bash
+bash benchmark/scripts/run_evaluations.sh
+```
 
-Therefore, **you must run inference once**, save predictions, and then run the benchmark on the saved outputs.
+Adapt paths in the script to match your checkpoint and config locations.
 
-#### Step 1 — generate ROSIE predictions
+---
+
+### Running ROSIE (two-step inference)
+
+ROSIE is significantly more computationally expensive than other methods and requires saving predictions first.
+
+**Step 1 — Generate ROSIE predictions:**
 
 ```bash
 python benchmark/scripts/rosie_inference.py \
@@ -46,7 +71,7 @@ python benchmark/scripts/rosie_inference.py \
     --num_workers 8
 ```
 
-#### Step 2 — run the benchmark using saved predictions
+**Step 2 — Run the benchmark on saved predictions:**
 
 ```bash
 python run_benchmark.py \
@@ -57,75 +82,61 @@ python run_benchmark.py \
     --config_dir config/data/
 ```
 
-### Running All Evaluations (all models × all datasets)
-
-A convenience script is provided:
-
-```bash
-bash benchmark/scripts/run_evaluations.sh
-```
-
-You may need to adapt paths depending on where checkpoints and configs are stored.
-
 ---
 
 ## 📁 Benchmark Structure
 
-All evaluation logic is modular and located in `benchmark/evaluators`:
+All evaluation logic is modular and located in `benchmark/evaluators/`:
 
-**1.** `BaseEvaluator` : Defines core evaluation logic and shared metrics.
+1. `base_evaluator.py` — Core evaluation logic and shared metrics.
+2. `dataset_evaluator.py` — Dataset-specific logic: how to read each dataset (WSI or tiles), map predicted/target markers, and split the nuclei dataframe.
+3. `model_evaluator.py` — Model-specific logic: loading weights, forward passes, and outputting predicted mIF channels.
 
-2. `dataset_evaluator.py`: Contain dataset-specific logic: Define how to read *each dataset* (WSI or tiles), how to map predicted/target markers, and how to split the nuclei dataframe.
+### Adding a New Dataset or Model
 
-**3.** `model_evaluator.py`: Define how each model: loads weights, performs forward passes, outputs predicted mIF channels
+Create a new evaluator in:
+- `dataset_evaluators/` for new datasets
+- `model_evaluators/` for new models
 
-### ➕ Adding a new dataset or model
-
-Simply create a new evaluator in:
-
-- `dataset_evaluators/` for datasets
-- `model_evaluators/` for models
-
-and register it.
+and register it in the corresponding `__init__.py`.
 
 ---
 
 ## ⚡ Efficiency Benchmark
 
-To measure inference speed, VRAM usage, throughput, and FLOPs:
+Measure inference speed, VRAM usage, throughput, and FLOPs:
 
 ```bash
 python benchmark/scripts/benchmark_efficiency.py \
     --checkpoints_dir CHECKPOINTS_DIR
 ```
 
-This script runs each model on a standard 256x256 tile and reports: FLOPS, peak GPU memory, model size (parameters)
+Runs each model on a standard 256×256 tile and reports: FLOPs, peak GPU memory, and model parameter count. `CHECKPOINTS_DIR` contains all model subfolders.
 
 ---
 
-## 🔍 Compare predicitons
+## 🔍 Compare Predictions
 
-To generate qualitative prediction figures (side-by-side comparisons across methods):
+Generate side-by-side qualitative comparisons across methods:
 
 ```bash
 python benchmark/scripts/generate_figure_predictions.py \
     --checkpoint_dir CHECKPOINT_DIR \
     --output_dir OUTPUT_DIR \
-    --slideindex 0 \
+    --slide-index 0 \
     --data_config config/data/orion.yaml
 ```
 
-This outputs:
-
+Outputs per sample:
 - H&E tile
-- predicted mIF channels ( 1 image per models)
-- target mIF
+- Predicted mIF channels (one image per model)
+- Ground-truth mIF
 
 ---
 
-## 📊 Radar Plots (global metric summary)
+## 📊 Radar Plots
 
-You can generate radar plots summarizing metrics across models:
+Summarize metrics across models with radar plots:
 
 ```bash
 python visualizations/radar_plots.py \
@@ -133,10 +144,15 @@ python visualizations/radar_plots.py \
     --save_dir OUTPUT_DIR
 ```
 
-Useful for aggregate comparison of pixel-level (Pearson, PSNR, SSIM) and cell-level (Cell AUPRC, F1 Score, ROC AUC) metrics.
+Useful for aggregate comparison of pixel-level (Pearson, PSNR, SSIM) and cell-level (Cell AUPRC, F1, ROC AUC) metrics.
+
+<p align="center">
+  <strong>Figure: Radar Plot Comparison of H&E to mIF Virtual Staining Performance</strong><br>
+  <img src="../figures/figure_benchmark.png" alt="Benchmark Results" width="1000px">
+</p>
 
 ---
 
 ## ⚙️ Training Scripts
 
-All training scripts for the benchmarked models are available in `training`folder, cf `training/README.md`
+Training scripts for all benchmarked baseline models are available in the `training/` folder. See [`training/README.md`](training/README.md) for details.

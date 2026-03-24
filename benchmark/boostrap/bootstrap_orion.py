@@ -24,38 +24,9 @@ from joblib import Parallel, delayed
 from omegaconf import OmegaConf
 from shapely.geometry import Point, box
 from shapely.strtree import STRtree
-from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.metrics import f1_score, average_precision_score
 from sklearn.utils import resample
 from tqdm import tqdm
-
-
-def recover_nuclei_centroids(df_cell: pd.DataFrame, slide_dataframe: pd.DataFrame) -> pd.DataFrame:
-    """
-    Recover nuclei centroid coordinates for each cell by merging cell data with nuclei position \
-    data from multiple slides.
-
-    Args:
-        df_cell (pd.DataFrame): DataFrame containing cell information, including 'slide_name' and
-            'cell_id' columns. Obtained from evaluation step.
-        slide_dataframe (pd.DataFrame): DataFrame with slide metadata, including 'nuclei_csv_path'
-            (path to nuclei CSV file) and 'in_slide_name'.
-
-    Returns:
-        pd.DataFrame: The input df_cell DataFrame merged with nuclei centroid coordinates ('x', 'y')
-            for each cell.
-    """
-    df_cell_positions = []
-    for _, row in slide_dataframe.iterrows():
-        df_wsi = pd.read_csv(row["nuclei_csv_path"], engine="pyarrow", usecols=['label', 'x', 'y'])
-        df_wsi["in_slide_name"] = row["in_slide_name"]
-        df_cell_positions.append(df_wsi)
-
-    df_cell_positions = pd.concat(df_cell_positions, ignore_index=True)
-    df_cell = df_cell.merge(df_cell_positions, left_on=["slide_name", "cell_id"],
-                            right_on=["in_slide_name", "label"])
-    del df_cell_positions; gc.collect()
-    df_cell.drop(columns=["in_slide_name"], inplace=True)
-    return df_cell
 
 
 def get_tile_infos(tile_name: str) -> pd.Series:
@@ -89,7 +60,6 @@ def match_cell_and_tile(df_cell: pd.DataFrame, slide_dataframe: pd.DataFrame,
         AssertionError: If any nucleus could not be matched to a tile (i.e., if any 'image_name'
             remains NaN).
     """
-    df_cell = recover_nuclei_centroids(df_cell, slide_dataframe)
     tile_info_df = test_dataframe["image_path"].apply(get_tile_infos)
     # Rename the columns to match the structure you described
     tile_info_df.columns = ["x", "y", "level", "tile_size_x", "tile_size_y"]
@@ -159,7 +129,7 @@ def run_boostrap_orion_analysis(checkpoint_dir: str) -> Tuple[np.ndarray, np.nda
                 evaluated.
     """
     cfg = OmegaConf.load("../configs/data/orion.yaml")
-    cell_prediction_path = str(Path(checkpoint_dir) / "cell_dataframe.csv")
+    cell_prediction_path = str(Path(checkpoint_dir) / "orion_cell_dataframe_logreg.parquet")
 
     # Load Data
     test_dataframe = pd.read_csv(cfg.data.test_dataframe_path)
@@ -167,25 +137,29 @@ def run_boostrap_orion_analysis(checkpoint_dir: str) -> Tuple[np.ndarray, np.nda
 
     slide_dataframe = pd.read_csv(cfg.data.slide_dataframe_path)
     slide_dataframe = slide_dataframe[slide_dataframe["in_slide_name"].isin(test_slide_names)]
-    df_cell = pd.read_csv(cell_prediction_path, engine="pyarrow")
+    df_cell = pd.read_parquet(cell_prediction_path)
+    df_target = pd.read_parquet(cfg.data.nuclei_dataframe_path)[["slide_name", "label", "x", "y"]]
+    df_cell = df_cell.merge(
+        df_target, left_on=["slide_name", "cell_id"], right_on=["slide_name", "label"], how="left")
+
     df_cell = df_cell[df_cell["slide_name"].isin(test_slide_names)]
-    marker_names = [col.replace("_pos", "") for col in df_cell.columns if "_pos" in col]
+    marker_names_target = [col.replace("_pos", "") for col in df_cell.columns if "_pos" in col]
+    marker_names_pred = [col.replace("_pred", "") for col in df_cell.columns if "_pred" in col]
 
     df_cell = match_cell_and_tile(df_cell, slide_dataframe, test_dataframe)
 
     # Load logistic regression model and predict cell types
-    n_markers = len(marker_names)
-    linear_logreg = torch.nn.Linear(n_markers, n_markers)
-    state_dict_logreg = torch.load(str(Path(checkpoint_dir) / "logreg.pth"), map_location="cpu")
+    linear_logreg = torch.nn.Linear(len(marker_names_pred), len(marker_names_target))
+    state_dict_logreg = torch.load(str(Path(checkpoint_dir) / "orion_logreg.pth"), map_location="cpu")
     linear_logreg.load_state_dict(state_dict_logreg)
     linear_logreg.eval()
 
-    pred = df_cell[[f"{marker_name}_pred" for marker_name in marker_names]].to_numpy().astype(
+    pred = df_cell[[f"{marker_name}_pred" for marker_name in marker_names_pred]].to_numpy().astype(
         np.float32)
     with torch.inference_mode():
         probs = torch.sigmoid(linear_logreg(torch.from_numpy(pred))).numpy()
     del pred; gc.collect()
-    df_cell[[f"{marker_name}_prob" for marker_name in marker_names]] = probs
+    df_cell[[f"{marker_name}_prob" for marker_name in marker_names_target]] = probs
 
     np.random.seed(42)
     seeds = np.random.randint(0, 10000, size=1000)
@@ -211,13 +185,13 @@ def run_boostrap_orion_analysis(checkpoint_dir: str) -> Tuple[np.ndarray, np.nda
         def compute_scores(marker_name):
             pred_col = f"{marker_name}_prob"
             true_col = f"{marker_name}_pos"
-            auc = roc_auc_score(y_true=df_cell_sampled[true_col], y_score=df_cell_sampled[pred_col])
+            ap_auc = average_precision_score(y_true=df_cell_sampled[true_col], y_score=df_cell_sampled[pred_col])
             f1 = f1_score(y_true=df_cell_sampled[true_col],
                           y_pred=(df_cell_sampled[pred_col] > 0.5).astype(int))
-            return auc, f1
+            return ap_auc, f1
 
         results = Parallel(n_jobs=-1)(delayed(compute_scores)(marker_name)
-                                      for marker_name in marker_names)
+                                      for marker_name in marker_names_target)
         auc_markers, f1_markers = map(list, zip(*results))
 
         aucs.append(np.hstack(auc_markers))
@@ -226,7 +200,7 @@ def run_boostrap_orion_analysis(checkpoint_dir: str) -> Tuple[np.ndarray, np.nda
     aucs = np.vstack(aucs)
     f1s = np.vstack(f1s)
 
-    return aucs, f1s, marker_names
+    return aucs, f1s, marker_names_target
 
 
 if __name__ == "__main__":
@@ -237,4 +211,4 @@ if __name__ == "__main__":
 
     aucs, f1s, marker_names = run_boostrap_orion_analysis(args.checkpoint_dir)
     with open(str(Path(args.checkpoint_dir) / "bootstrap_results.json"), "w") as f:
-        json.dump({"aucs": aucs.tolist(), "f1s": f1s.tolist(), "marker_names": marker_names}, f)
+        json.dump({"ap_aucs": aucs.tolist(), "f1s": f1s.tolist(), "marker_names": marker_names}, f)

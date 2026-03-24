@@ -199,7 +199,9 @@ class SlideDataset(Dataset):
 
         image = torch.from_numpy(image).permute(2, 0, 1)
 
-        return {"image": image, "tile_name": tile_name}
+        return {"image": image, "tile_name": tile_name, "slide_name": slide_name,
+                "x": row["x"], "y": row["y"], "level": level,
+                "tile_size_x": tile_size[0], "tile_size_y": tile_size[1]}
 
     def __len__(self):
         """Return the number of samples in the dataset."""
