@@ -122,7 +122,7 @@ Instructions for automatically downloading all datasets, as well as adding your 
 ```bash
 python scripts/download_miphei.py --out-dir MIPHEI-vit
 ```
-
+> ⚠️ **Important:** Access to the **H-optimus-0** weights on Hugging Face is required to run MIPHEI-ViT. Please make sure you have permission here: [H-optimus-0 on Hugging Face](https://huggingface.co/bioptimus/H-optimus-0)
 - All comparison models (**MIPHEI-HEMIT**, **HEMIT-ORION**, **UNETR H-Optimus-0**, **U-Net ConvNeXtv2**) are on
   <a href="https://wandb.ai/guillaume-balezo/MIPHEI-ViT_paper/artifacts/">
     <img src="https://wandb.ai/logo.svg" alt="Weights & Biases" height="18" style="vertical-align: middle;"> Weights & Biases
