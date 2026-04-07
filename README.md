@@ -17,11 +17,16 @@
   <a href="https://colab.research.google.com/github/Sanofi-Public/MIPHEI-ViT/blob/main/notebooks/colab_inference.ipynb">
     <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab" height="25">
   </a>
+  <a href="https://miphei-vit-demo.minesparis.psl.eu/" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/badge/Gradio-Demo-ffb000?logo=gradio" alt="Gradio Demo" height="25">
+  </a>
 </p>
 
 We introduce **MIPHEI-ViT**, a **U-Net-style** architecture that leverages the **H-Optimus-0** ViT foundation model as an encoder to predict multi-channel mIF images from H&E slides. Inspired by ViTMatte, the model combines a hybrid transformer–convolutional encoder with a convolutional decoder.
 
 This repository supports full **reproducibility** of our paper on predicting **multiplex immunofluorescence (mIF)** from standard **H&E-stained histology images**. It includes all **code**, **pretrained models**, and **preprocessing steps** to replicate our results or apply the approach to new datasets.
+
+The demo is **no longer hosted on Hugging Face** and is now self-hosted. Try it here: <a href="https://miphei-vit-demo.minesparis.psl.eu/" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Gradio-Demo-ffb000?logo=gradio" alt="Gradio Demo" height="25"></a>
 
 ---
 
@@ -31,12 +36,12 @@ This repository supports full **reproducibility** of our paper on predicting **m
 - [Installation](#-installation)
 - [Data Download](#-data-download)
 - [Model Weights](#-model-weights)
-- [Inference](#-inference)
+- [Inference](#️-inference)
 - [Benchmark](#-benchmark)
 - [Training](#-training)
 - [SlideVips](#-slidevips)
 - [Preprocessing Pipeline](#-preprocessing-pipeline)
-- [Project Status](#-project-status)
+- [Project Status](#️-project-status)
 - [Citation](#-citation)
 
 ---
@@ -152,7 +157,10 @@ Each model folder contains:
   <img src="figures/wsi_inference.gif" alt="WSI inference demo" width="900px">
 </p>
 
+> ⚠️ **WSI inference requires the conda installation.** The `pyvips` dependency does not install correctly via `uv` or plain `pip` and will cause runtime when writing output. Make sure you are using the conda environment created with `environment.yaml`.
+
 ```bash
+ulimit -n 4096   # optional, the script opens many files that can exceed the default limit
 python run_wsi_inference.py \
   --slide_path path/to/slide.wsi \
   --checkpoint_dir path/to/miphei_checkpoint \
